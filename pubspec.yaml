@@ -1,0 +1,39 @@
+name: local_study
+description: 本地优先、带原文出处的教材自学与论文精读客户端。
+publish_to: none
+version: 0.1.0+1
+
+environment:
+  sdk: '>=3.13.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  crypto: ^3.0.6
+  file_picker: ^10.3.10
+  flutter_secure_storage: ^10.0.0
+  http: ^1.6.0
+  path: ^1.9.1
+  path_provider: ^2.1.5
+  pdfrx: 2.6.5
+  sqlite3: ^3.1.0
+  uuid: ^4.5.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/ocr/
+    - assets/brand/
+    - licenses/
+  fonts:
+    - family: Manrope
+      fonts:
+        - asset: assets/brand/Manrope.ttf
+

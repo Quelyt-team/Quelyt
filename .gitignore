@@ -1,0 +1,37 @@
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.tooling/
+build/
+coverage/
+*.iml
+android/local.properties
+android/.gradle/
+android/key.properties
+*.keystore
+*.jks
+windows/flutter/ephemeral/
+*.log
+.idea/
+
+# Device-local credentials and study data never belong in a source release.
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+*.pem
+*.pfx
+
+# Keep workstation history and screenshots local; publish reviewed docs only.
+docs/*
+!docs/OCR.md
+!docs/首版验收.md
+!docs/功能校验与DeepTutor对齐计划.md
+!docs/公开归档清单.md
+
