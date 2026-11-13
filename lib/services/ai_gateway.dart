@@ -4,81 +4,12 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
-/// Settings contain no secret and can be persisted with the learning records.
-class ProviderSettings {
-  const ProviderSettings({
-    required this.provider,
-    required this.baseUrl,
-    required this.model,
-    this.visionModel = '',
-  });
+import 'ai_transport.dart';
+import 'ai_types.dart';
 
-  factory ProviderSettings.deepSeek() => const ProviderSettings(
-    provider: 'DeepSeek',
-    baseUrl: 'https://api.deepseek.com',
-    model: 'deepseek-flash',
-  );
-
-  factory ProviderSettings.bailian() => const ProviderSettings(
-    provider: '阿里云百炼',
-    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    model: 'qwen-plus',
-    visionModel: 'qwen-vl-plus',
-  );
-
-  factory ProviderSettings.fromJson(Map<String, dynamic> value) =>
-      ProviderSettings(
-        provider: value['provider'] as String? ?? '自定义',
-        baseUrl: value['baseUrl'] as String? ?? '',
-        model: value['model'] as String? ?? '',
-        visionModel: value['visionModel'] as String? ?? '',
-      );
-
-  final String provider;
-  final String baseUrl;
-  final String model;
-  final String visionModel;
-
-  Map<String, dynamic> toJson() => {
-    'provider': provider,
-    'baseUrl': baseUrl,
-    'model': model,
-    'visionModel': visionModel,
-  };
-
-  /// Accept a base URL or a complete Chat Completions endpoint.
-  Uri get endpoint {
-    final uri = Uri.tryParse(baseUrl.trim());
-    if (uri == null || !uri.hasAuthority || uri.host.isEmpty) {
-      throw const AiFailure(AiError.invalidSettings, '请填写有效的接口地址。');
-    }
-    final isLoopback = const [
-      'localhost',
-      '127.0.0.1',
-      '::1',
-    ].contains(uri.host);
-    if (uri.scheme != 'https' && !(uri.scheme == 'http' && isLoopback)) {
-      throw const AiFailure(
-        AiError.invalidSettings,
-        '接口需要使用 HTTPS；本机 localhost 服务可以使用 HTTP。',
-      );
-    }
-    if (uri.userInfo.isNotEmpty || uri.hasQuery || uri.hasFragment) {
-      throw const AiFailure(AiError.invalidSettings, '接口地址不能包含用户名、密码、查询参数或片段。');
-    }
-    var path = uri.path.replaceFirst(RegExp(r'/+$'), '');
-    if (!path.endsWith('/chat/completions')) path += '/chat/completions';
-    return uri.replace(path: path);
-  }
-
-  /// Bind a key to the actual destination, so editing a provider name or URL
-  /// cannot silently send an existing credential to a different service.
-  String get credentialId =>
-      'learning_api_${sha256.convert(utf8.encode('${provider.trim()}\n${endpoint.toString()}'))}';
-}
+export 'ai_types.dart';
 
 enum AiTask {
   explain,
@@ -230,44 +161,6 @@ class PreparedAiRequest {
   }
 }
 
-abstract interface class CredentialVault {
-  Future<String?> read(String accountId);
-  Future<void> write(String accountId, String value);
-  Future<void> delete(String accountId);
-}
-
-class SystemCredentialVault implements CredentialVault {
-  const SystemCredentialVault({FlutterSecureStorage? storage})
-    : _storage = storage ?? const FlutterSecureStorage();
-
-  final FlutterSecureStorage _storage;
-
-  @override
-  Future<String?> read(String accountId) => _storage.read(key: accountId);
-  @override
-  Future<void> write(String accountId, String value) =>
-      _storage.write(key: accountId, value: value);
-  @override
-  Future<void> delete(String accountId) => _storage.delete(key: accountId);
-}
-
-class TokenUsage {
-  const TokenUsage({
-    required this.promptTokens,
-    required this.completionTokens,
-    required this.totalTokens,
-  });
-  final int promptTokens;
-  final int completionTokens;
-  final int totalTokens;
-
-  Map<String, dynamic> toJson() => {
-    'promptTokens': promptTokens,
-    'completionTokens': completionTokens,
-    'totalTokens': totalTokens,
-  };
-}
-
 class AiResult {
   AiResult({
     required this.answer,
@@ -295,44 +188,14 @@ class AiResult {
   bool get requiresVerification => rejectedCitationIds.isNotEmpty;
 }
 
-enum AiError {
-  invalidSettings,
-  missingKey,
-  credentialStorage,
-  contextTooLarge,
-  invalidImage,
-  imageApprovalRequired,
-  alreadySent,
-  unauthorized,
-  rateLimited,
-  timeout,
-  network,
-  server,
-  rejected,
-  invalidResponse,
-  truncated,
-}
-
-class AiFailure implements Exception {
-  const AiFailure(this.code, this.message, {this.statusCode});
-  final AiError code;
-  final String message;
-  final int? statusCode;
-  @override
-  String toString() => message;
-}
-
 class AiGateway {
   AiGateway({
     http.Client? client,
     CredentialVault? vault,
-    this.timeout = const Duration(seconds: 90),
-  }) : _client = client ?? http.Client(),
-       _vault = vault ?? const SystemCredentialVault();
+    Duration timeout = const Duration(seconds: 90),
+  }) : transport = AiTransport(client: client, vault: vault, timeout: timeout);
 
-  final http.Client _client;
-  final CredentialVault _vault;
-  final Duration timeout;
+  final AiTransport transport;
   static const maxEvidenceCharacters = 16000;
   static const maxQuestionCharacters = 3000;
   static const maxAnswerCharacters = 6000;
@@ -340,41 +203,17 @@ class AiGateway {
   static const maxHistoryTurns = 6;
   static const maxHistoryCharacters = 8000;
 
-  Future<String?> readKey(ProviderSettings settings) async {
-    final accountId = settings.credentialId;
-    try {
-      return await _vault.read(accountId);
-    } catch (_) {
-      throw const AiFailure(
-        AiError.credentialStorage,
-        '无法读取系统凭据存储，请重新保存 API Key。',
-      );
-    }
-  }
+  Future<String?> readKey(ProviderSettings settings) =>
+      transport.readKey(settings);
 
-  Future<void> saveKey(ProviderSettings settings, String key) async {
-    final accountId = settings.credentialId;
-    if (key.trim().isEmpty || key.contains('\n') || key.contains('\r')) {
-      throw const AiFailure(AiError.missingKey, '请填写有效的 API Key。');
-    }
-    try {
-      await _vault.write(accountId, key.trim());
-    } catch (_) {
-      throw const AiFailure(
-        AiError.credentialStorage,
-        '无法写入系统凭据存储，API Key 尚未保存。',
-      );
-    }
-  }
+  Future<void> saveKey(ProviderSettings settings, String key) =>
+      transport.saveKey(settings, key);
 
-  Future<void> deleteKey(ProviderSettings settings) async {
-    final accountId = settings.credentialId;
-    try {
-      await _vault.delete(accountId);
-    } catch (_) {
-      throw const AiFailure(AiError.credentialStorage, '无法删除系统凭据，请稍后重试。');
-    }
-  }
+  Future<void> deleteKey(ProviderSettings settings) =>
+      transport.deleteKey(settings);
+
+  Future<String> testConnection(ProviderSettings settings) =>
+      transport.testConnection(settings);
 
   /// Preparing requests is local and never reads a key or opens a connection.
   /// We reject oversize context rather than silently change the send preview.
@@ -531,66 +370,15 @@ class AiGateway {
       imageApproval._used = true;
     }
     request._sent = true;
-    final key = await readKey(request.settings);
-    if (key == null || key.trim().isEmpty) {
-      throw const AiFailure(AiError.missingKey, '请先在设置中保存此服务商的 API Key。');
-    }
-    final abort = Completer<void>();
-    try {
-      // Explicit Request disables redirects. A server redirect must not move
-      // a user's source text, image or Authorization header to a new host.
-      final outgoing =
-          http.AbortableRequest(
-              'POST',
-              request.endpoint,
-              abortTrigger: abort.future,
-            )
-            ..followRedirects = false
-            ..headers.addAll({
-              'Authorization': 'Bearer $key',
-              'Content-Type': 'application/json; charset=utf-8',
-            })
-            ..body = request.payloadJson;
-      final response =
-          await (() async {
-            final streamed = await _client.send(outgoing);
-            final bytes = BytesBuilder(copy: false);
-            await for (final chunk in streamed.stream) {
-              if (bytes.length + chunk.length > 2 * 1024 * 1024) {
-                if (!abort.isCompleted) abort.complete();
-                throw const AiFailure(
-                  AiError.invalidResponse,
-                  '服务商返回内容过长，请缩小问题范围。',
-                );
-              }
-              bytes.add(chunk);
-            }
-            return http.Response.bytes(bytes.takeBytes(), streamed.statusCode);
-          })().timeout(
-            timeout,
-            onTimeout: () {
-              if (!abort.isCompleted) abort.complete();
-              throw TimeoutException('AI request timeout');
-            },
-          );
-      if (response.statusCode != 200) throw _httpFailure(response.statusCode);
-      return _parseResponse(utf8.decode(response.bodyBytes), request);
-    } on AiFailure {
-      rethrow;
-    } on TimeoutException {
-      throw const AiFailure(AiError.timeout, '请求超时。请检查网络后重新预览并发送；本次不自动重试。');
-    } on http.ClientException {
-      throw const AiFailure(AiError.network, '无法连接服务商。已保存的阅读、笔记和复习仍可离线使用。');
-    } on FormatException {
-      throw const AiFailure(AiError.invalidResponse, '服务商返回了无法核对的内容，请调整模型或重试。');
-    } catch (_) {
-      // Do not surface raw provider bodies or transport exception strings:
-      // they may echo source material, user answers or credentials.
-      throw const AiFailure(AiError.network, '请求未完成，请检查网络和服务商设置。');
-    }
+    final response = await transport.postJson(
+      settings: request.settings,
+      endpoint: request.endpoint,
+      payloadJson: request.payloadJson,
+    );
+    return _parseResponse(response.body, request);
   }
 
-  void close() => _client.close();
+  void close() => transport.close();
 
   AiResult _parseResponse(String body, PreparedAiRequest request) {
     final dynamic outer;
@@ -651,20 +439,7 @@ class AiGateway {
         rejected.add(item);
       }
     }
-    TokenUsage? usage;
-    final dynamic rawUsage = outer['usage'];
-    if (rawUsage is Map) {
-      int readCount(String name) {
-        final dynamic count = rawUsage[name];
-        return count is num && count >= 0 ? count.toInt() : 0;
-      }
-
-      usage = TokenUsage(
-        promptTokens: readCount('prompt_tokens'),
-        completionTokens: readCount('completion_tokens'),
-        totalTokens: readCount('total_tokens'),
-      );
-    }
+    final usage = AiTransport.usageFromEnvelope(outer);
     final lacksSource =
         request.evidence.isEmpty &&
         request.image == null &&
@@ -686,38 +461,6 @@ class AiGateway {
       model: request.model,
       provider: request.settings.provider,
       requestId: request.requestId,
-    );
-  }
-
-  static AiFailure _httpFailure(int status) {
-    if (status == 401 || status == 403) {
-      return AiFailure(
-        AiError.unauthorized,
-        'API Key 无效、已过期或没有访问此模型的权限。',
-        statusCode: status,
-      );
-    }
-    if (status == 429) {
-      return AiFailure(
-        AiError.rateLimited,
-        '服务商限流或余额不足，请稍后检查账号后重试。',
-        statusCode: status,
-      );
-    }
-    if (status >= 500) {
-      return AiFailure(AiError.server, '服务商暂时不可用，请稍后重试。', statusCode: status);
-    }
-    if (status >= 300 && status < 400) {
-      return AiFailure(
-        AiError.rejected,
-        '服务商要求重定向，请核对接口地址后重新预览发送。',
-        statusCode: status,
-      );
-    }
-    return AiFailure(
-      AiError.rejected,
-      '服务商拒绝了请求，请核对模型名称、接口地址和图片支持情况。',
-      statusCode: status,
     );
   }
 

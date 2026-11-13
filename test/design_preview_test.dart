@@ -9,6 +9,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:local_study/app_controller.dart';
 import 'package:local_study/core/local_store.dart';
 import 'package:local_study/core/models.dart';
+import 'package:local_study/features/library/library_controller.dart';
+import 'package:local_study/features/library/models/library_models.dart';
 import 'package:local_study/services/ai_gateway.dart';
 import 'package:local_study/services/document_service.dart';
 import 'package:local_study/services/ocr_service.dart';
@@ -279,7 +281,6 @@ void main() {
   testWidgets('design preview: desktop and reader layouts', (tester) async {    await setView(tester, const Size(1440, 900));
     await pumpApp(tester, dark: false);
     await capture(tester, '01-library-desktop');
-
     await tester.tap(find.text('复习').first);
     await tester.pumpAndSettle();
     await capture(tester, '02-review-desktop');
@@ -376,23 +377,68 @@ void main() {
     await capture(tester, '19-library-empty-desktop');
   });
 
+  testWidgets('design preview: library folder tree', (tester) async {
+    await setView(tester, const Size(1440, 900));
+    final library = LibraryController(
+      store: store,
+      documents: controller.documents,
+    );
+    final root = await library.createFolder(name: '大三上');
+    final chemistry = await library.createFolder(
+      name: '高分子化学',
+      parentId: root!.id,
+    );
+    final materials = await library.createFolder(
+      name: '教材',
+      parentId: chemistry!.id,
+    );
+    final exams = await library.createFolder(
+      name: '真题',
+      parentId: chemistry.id,
+    );
+    final finalPrep = await library.createFolder(name: '期末备考');
+    await library.setFolderAppearance(
+      root.id,
+      colorMode: FolderColorMode.custom,
+      colorValue: 0xFF16A34A,
+    );
+    await library.setFolderAppearance(
+      exams!.id,
+      colorMode: FolderColorMode.custom,
+      colorValue: 0xFFEA580C,
+    );
+    await library.setFolderAppearance(
+      finalPrep!.id,
+      colorMode: FolderColorMode.custom,
+      colorValue: 0xFF9333EA,
+    );
+    library.refresh();
+    final bookEntry = library.repository.primaryEntry(book.id)!;
+    await library.moveNodes(entryIds: {bookEntry.id}, targetFolderId: materials!.id);
+    final paperEntry = library.repository.primaryEntry('paper')!;
+    await library.moveNodes(
+      entryIds: {paperEntry.id},
+      targetFolderId: finalPrep.id,
+    );
+    library.dispose();
+
+    await pumpApp(tester, dark: false);
+    await capture(tester, '20-library-folders');
+    await tester.tap(find.text('高分子化学').first);
+    await tester.pumpAndSettle();
+    await capture(tester, '21-library-folder-view');
+  });
   testWidgets('design preview: dialogs', (tester) async {
     await setView(tester, const Size(1440, 900));
     await pumpApp(tester, dark: false);
 
-    await tester.tap(find.text('导入资料'));
+    await tester.tap(find.text('新建第一个文件夹'));
     await tester.pumpAndSettle();
-    await capture(tester, '20-dialog-import');
+    await capture(tester, '20-dialog-folder');
     await tester.tap(find.byTooltip('关闭'));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('资料操作').first);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('删除资料'));
-    await tester.pumpAndSettle();
-    await capture(tester, '21-dialog-delete');
-    await tester.tap(find.text('取消'));
-    await tester.pumpAndSettle();
+
 
     enterReader();
     await pumpApp(tester, dark: false);

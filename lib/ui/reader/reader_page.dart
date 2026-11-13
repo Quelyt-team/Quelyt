@@ -1,10 +1,11 @@
-import 'dart:math' as math;
+﻿import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../app_controller.dart';
 import '../../core/models.dart';
+import '../../features/book_qa/book_qa_controller.dart';
 import '../../services/ai_gateway.dart';
 import '../dialogs/app_dialogs.dart';
 import '../learning_panel.dart';
@@ -29,6 +30,8 @@ class ReaderPage extends StatefulWidget {
     required this.onBack,
     required this.onRequest,
     required this.onJump,
+    required this.bookQa,
+    this.onOpenNoteInWorkspace,
     this.showRail = false,
     this.showWindowChrome = false,
     this.openPanelOnStart = false,
@@ -42,6 +45,8 @@ class ReaderPage extends StatefulWidget {
   final VoidCallback onBack;
   final Future<void> Function(AiTask, String, bool) onRequest;
   final Future<void> Function(Evidence) onJump;
+  final BookQaController bookQa;
+  final ValueChanged<String>? onOpenNoteInWorkspace;
   final bool showRail;
   final bool showWindowChrome;
   final bool openPanelOnStart;
@@ -84,8 +89,13 @@ class _ReaderPageState extends State<ReaderPage>
   }
 
   void _toast(String message) =>
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(message)));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 104),
+        ),
+      );
 
   bool get _typing {
     final focus = FocusManager.instance.primaryFocus;
@@ -311,14 +321,14 @@ class _ReaderPageState extends State<ReaderPage>
   Widget _desktop(DocumentRecord document) {
     // A fixed-width study rail reads better than a percentage: the page keeps
     // the remaining 1000px+ on a 1440 window while answers stay comfortable.
-    final panelWidth = (_panelWidth ?? 400.0).clamp(380.0, 560.0).toDouble();
+    final panelWidth = (_panelWidth ?? 400.0).clamp(360.0, 560.0).toDouble();
     return Row(
       children: [
         Expanded(child: _pageColumn(document)),
         if (_panelOpen)
           _ResizeHandle(
             onDrag: (dx) => setState(() {
-              _panelWidth = (panelWidth - dx).clamp(380.0, 560.0).toDouble();
+              _panelWidth = (panelWidth - dx).clamp(360.0, 560.0).toDouble();
             }),
             onReset: () => setState(() => _panelWidth = null),
           ),
@@ -386,17 +396,19 @@ class _ReaderPageState extends State<ReaderPage>
                   child: Row(
                     children: [
                       AccentIcon(
-                        icon: Icons.school_outlined,
+                        icon: QIcons.study,
                         accent: context.colors.blueAccent,
                         size: 28,
-                        iconSize: 16,
+                        iconSize: IconSizes.sm,
                       ),
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          document.kind == DocumentKind.textbook
-                              ? '教材学习面板'
-                              : '论文精读面板',
+                          switch (document.kind) {
+                            DocumentKind.textbook => '教材学习面板',
+                            DocumentKind.paper => '论文精读面板',
+                            DocumentKind.unspecified => '阅读与问答面板',
+                          },
                           style: context.texts.titleSmall!.copyWith(
                             fontSize: 14.5,
                           ),
@@ -562,13 +574,15 @@ class _ReaderPageState extends State<ReaderPage>
           const SizedBox(height: 7),
           Row(
             children: [
-              Icon(Icons.school_outlined, size: 17, color: colors.primary),
+              QIcon(QIcons.study, size: IconSizes.sm, color: colors.primary),
               const SizedBox(width: 7),
               Expanded(
                 child: Text(
-                  document.kind == DocumentKind.textbook
-                      ? '学习面板 · $step'
-                      : '论文精读 · $step',
+                  switch (document.kind) {
+                    DocumentKind.textbook => '学习面板 · $step',
+                    DocumentKind.paper => '论文精读 · $step',
+                    DocumentKind.unspecified => '阅读与问答 · $step',
+                  },
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: context.texts.bodySmall!.copyWith(
@@ -578,11 +592,9 @@ class _ReaderPageState extends State<ReaderPage>
                   ),
                 ),
               ),
-              Icon(
-                expanded
-                    ? Icons.keyboard_arrow_down_rounded
-                    : Icons.keyboard_arrow_up_rounded,
-                size: 20,
+              QIcon(
+                expanded ? QIcons.chevronDown : QIcons.chevronUp,
+                size: IconSizes.md,
                 color: colors.inkMuted,
               ),
             ],
@@ -602,6 +614,8 @@ class _ReaderPageState extends State<ReaderPage>
     onRequest: widget.onRequest,
     onNote: _addNote,
     onJump: _jump,
+    onOpenNoteInWorkspace: widget.onOpenNoteInWorkspace,
+    bookQa: widget.bookQa,
     trailing: trailing,
     tabController: _tabs,
     showHeader: showHeader,
@@ -678,18 +692,18 @@ class _ReaderPageState extends State<ReaderPage>
         children: [
           TextButton.icon(
             onPressed: c.indexing ? null : () => c.recognizeCurrentPage(),
-            icon: const Icon(Icons.refresh_rounded, size: 15),
+            icon: const QIcon(QIcons.refresh, size: IconSizes.sm),
             label: const Text('重新识别本页'),
           ),
           TextButton.icon(
             onPressed: c.indexing ? null : _correctText,
-            icon: const Icon(Icons.edit_note_rounded, size: 15),
+            icon: const QIcon(QIcons.notes, size: IconSizes.sm),
             label: const Text('校正文字'),
           ),
           if (widget.onOpenOcrSettings != null)
             TextButton.icon(
               onPressed: widget.onOpenOcrSettings,
-              icon: const Icon(Icons.settings_outlined, size: 15),
+              icon: const QIcon(QIcons.settings, size: IconSizes.sm),
               label: const Text('文字识别设置'),
             ),
         ],
@@ -738,17 +752,22 @@ class _ReaderPageState extends State<ReaderPage>
                       fontWeight: FontWeight.w500,
                     ),
                   ),
-                  icon: Icon(Icons.arrow_back_rounded, size: narrow ? 16 : 18),
+                  icon: QIcon(
+                    QIcons.back,
+                    size: narrow ? IconSizes.sm : IconSizes.md,
+                  ),
                   label: const Text('书库'),
                 ),
               ),
               SizedBox(width: narrow ? 2 : 6),
               if (constraints.maxWidth >= 520) ...[
-                Icon(
-                  document.kind == DocumentKind.textbook
-                      ? Icons.menu_book_outlined
-                      : Icons.article_outlined,
-                  size: 18,
+                QIcon(
+                  switch (document.kind) {
+                    DocumentKind.textbook => QIcons.textbook,
+                    DocumentKind.paper => QIcons.paper,
+                    DocumentKind.unspecified => QIcons.study,
+                  },
+                  size: IconSizes.md,
                   color: colors.inkMuted,
                 ),
                 const SizedBox(width: 8),
@@ -821,13 +840,13 @@ class _ReaderPageState extends State<ReaderPage>
                 IconButton(
                   tooltip: '检索本篇原文（Ctrl+F）',
                   onPressed: ready > 0 ? _search : null,
-                  icon: const Icon(Icons.search_rounded, size: 20),
+                  icon: const QIcon(QIcons.search, size: IconSizes.md),
                 ),
               PopupMenuButton<String>(
                 tooltip: '更多页面工具',
-                icon: Icon(
-                  Icons.more_vert_rounded,
-                  size: 20,
+                icon: QIcon(
+                  QIcons.more,
+                  size: IconSizes.md,
                   color: colors.inkMuted,
                 ),
                 onSelected: (value) {
@@ -860,7 +879,7 @@ class _ReaderPageState extends State<ReaderPage>
                       context,
                       '检索本篇原文',
                       'Ctrl+F',
-                      Icons.search_rounded,
+                      QIcons.search,
                     ),
                   ),
                   PopupMenuItem(
@@ -869,7 +888,7 @@ class _ReaderPageState extends State<ReaderPage>
                       context,
                       '跳转物理页',
                       'Ctrl+G',
-                      Icons.tag_rounded,
+                      QIcons.page,
                     ),
                   ),
                   const PopupMenuDivider(),
@@ -880,7 +899,7 @@ class _ReaderPageState extends State<ReaderPage>
                       context,
                       '重新识别当前整页',
                       null,
-                      Icons.document_scanner_outlined,
+                      QIcons.ocr,
                     ),
                   ),
                   PopupMenuItem(
@@ -890,7 +909,7 @@ class _ReaderPageState extends State<ReaderPage>
                       context,
                       '校正当前页文字',
                       null,
-                      Icons.edit_note_outlined,
+                      QIcons.notes,
                     ),
                   ),
                   PopupMenuItem(
@@ -899,7 +918,7 @@ class _ReaderPageState extends State<ReaderPage>
                       context,
                       c.paused ? '继续后台索引' : '暂停后台索引',
                       null,
-                      c.paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+                      c.paused ? QIcons.play : QIcons.pause,
                     ),
                   ),
                   const PopupMenuDivider(),
@@ -909,7 +928,7 @@ class _ReaderPageState extends State<ReaderPage>
                       context,
                       '键盘快捷键',
                       null,
-                      Icons.keyboard_outlined,
+                      QIcons.keyboard,
                     ),
                   ),
                 ],
@@ -927,12 +946,12 @@ class _ReaderPageState extends State<ReaderPage>
     BuildContext context,
     String label,
     String? shortcut,
-    IconData icon,
+    QIconData icon,
   ) {
     final c = context.colors;
     return Row(
       children: [
-        Icon(icon, size: 16, color: c.inkMuted),
+        QIcon(icon, size: IconSizes.sm, color: c.inkMuted),
         const SizedBox(width: 8),
         Expanded(child: Text(label)),
         if (shortcut != null) ...[
@@ -964,7 +983,7 @@ class _PageStepper extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    final buttonSize = compact ? 28.0 : 34.0;
+    final buttonSize = compact ? 30.0 : 34.0;
     return Container(
       height: compact ? 32 : 36,
       decoration: BoxDecoration(
@@ -984,7 +1003,10 @@ class _PageStepper extends StatelessWidget {
               minWidth: buttonSize,
               minHeight: buttonSize,
             ),
-            icon: Icon(Icons.chevron_left_rounded, size: compact ? 17 : 19),
+            icon: QIcon(
+              QIcons.chevronLeft,
+              size: compact ? IconSizes.sm : IconSizes.md,
+            ),
           ),
           Semantics(
             button: true,
@@ -1013,7 +1035,10 @@ class _PageStepper extends StatelessWidget {
               minWidth: buttonSize,
               minHeight: buttonSize,
             ),
-            icon: Icon(Icons.chevron_right_rounded, size: compact ? 17 : 19),
+            icon: QIcon(
+              QIcons.chevronRight,
+              size: compact ? IconSizes.sm : IconSizes.md,
+            ),
           ),
         ],
       ),

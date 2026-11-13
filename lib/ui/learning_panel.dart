@@ -5,6 +5,10 @@ import 'package:flutter/services.dart';
 
 import '../app_controller.dart';
 import '../core/models.dart';
+import '../features/book_qa/book_qa_controller.dart';
+import '../features/book_qa/ui/book_qa_panel.dart';
+import '../features/review/models/review_models.dart';
+import '../features/review/ui/review_dialogs.dart';
 import '../services/ai_gateway.dart';
 import 'dialogs/app_dialogs.dart';
 import 'shell/app_chrome.dart';
@@ -19,6 +23,8 @@ class LearningPanel extends StatefulWidget {
     required this.onRequest,
     required this.onNote,
     required this.onJump,
+    this.onOpenNoteInWorkspace,
+    this.bookQa,
     this.onExpanded,
     this.trailing,
     this.tabController,
@@ -29,6 +35,11 @@ class LearningPanel extends StatefulWidget {
   final Future<void> Function(AiTask, String, bool) onRequest;
   final Future<void> Function() onNote;
   final Future<void> Function(Evidence) onJump;
+  final ValueChanged<String>? onOpenNoteInWorkspace;
+
+  /// Textbook questions use the whole-book conversation; papers keep the
+  /// page-scoped AI flow above.
+  final BookQaController? bookQa;
   final Widget? trailing;
 
   /// Shared with the reader's left dock so both surfaces stay in sync.
@@ -356,9 +367,23 @@ class _LearningPanelState extends State<LearningPanel>
             child: TabBarView(
               controller: _tabs,
               children: [
-                c.current!.kind == DocumentKind.textbook
-                    ? _textbook()
-                    : _paper(),
+                AnimatedSwitcher(
+                  duration: context.motion(Motion.base),
+                  switchInCurve: Motion.curve,
+                  switchOutCurve: Curves.easeIn,
+                  layoutBuilder: (currentChild, previousChildren) => Stack(
+                    fit: StackFit.expand,
+                    children: [...previousChildren, ?currentChild],
+                  ),
+                  child: KeyedSubtree(
+                    key: ValueKey(c.current!.kind),
+                    child: switch (c.current!.kind) {
+                      DocumentKind.textbook => _textbook(),
+                      DocumentKind.paper => _paper(),
+                      DocumentKind.unspecified => _general(),
+                    },
+                  ),
+                ),
                 _questions(),
                 _notes(),
               ],
@@ -375,14 +400,13 @@ class _LearningPanelState extends State<LearningPanel>
       animation: _tabs,
       builder: (context, _) {
         final (icon, label) = switch (_tabs.index) {
-          1 => (Icons.forum_outlined, '问答'),
-          2 => (Icons.edit_note_outlined, '笔记'),
-          _ => (
-            kind == DocumentKind.textbook
-                ? Icons.menu_book_outlined
-                : Icons.article_outlined,
-            '学习',
-          ),
+          1 => (QIcons.qa, '问答'),
+          2 => (QIcons.notes, '笔记'),
+          _ => switch (kind) {
+            DocumentKind.textbook => (QIcons.textbook, '教材学习'),
+            DocumentKind.paper => (QIcons.paper, '论文精读'),
+            DocumentKind.unspecified => (QIcons.study, '阅读与问答'),
+          },
         };
         return Container(
           height: AppChrome.titleBarHeight,
@@ -395,7 +419,7 @@ class _LearningPanelState extends State<LearningPanel>
           ),
           child: Row(
             children: [
-              Icon(icon, size: 16, color: context.colors.inkMuted),
+              QIcon(icon, size: IconSizes.sm, color: context.colors.inkMuted),
               const SizedBox(width: 8),
               Text(
                 label,
@@ -405,11 +429,113 @@ class _LearningPanelState extends State<LearningPanel>
                 ),
               ),
               const Spacer(),
+              if (_tabs.index == 0)
+                PopupMenuButton<DocumentKind>(
+                  tooltip: '切换学习方式',
+                  padding: EdgeInsets.zero,
+                  icon: const QIcon(QIcons.more, size: IconSizes.sm),
+                  onSelected: c.setLearningMode,
+                  itemBuilder: (context) => [
+                    for (final mode in DocumentKind.values)
+                      CheckedPopupMenuItem(
+                        value: mode,
+                        checked: kind == mode,
+                        child: Text(mode.label),
+                      ),
+                  ],
+                ),
               if (widget.trailing != null) widget.trailing!,
             ],
           ),
         );
       },
+    );
+  }
+
+  Widget _general() {
+    final document = c.current!;
+    final colors = context.colors;
+    final ready = c.store
+        .getPages(document.id)
+        .where((page) => page.status == PageStatus.ready)
+        .length;
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
+      children: [
+        AppCallout(
+          tone: CalloutTone.info,
+          title: '直接开始阅读',
+          message: '暂未选定学习方式。可直接阅读、提问与记笔记，按需随时切换；切换不清空内容。',
+        ),
+        const SizedBox(height: Space.lg),
+        Text(
+          '阅读进度',
+          style: context.texts.bodySmall!.copyWith(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Expanded(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(2),
+                child: LinearProgressIndicator(
+                  value: document.pageCount == 0
+                      ? 0
+                      : document.currentPage / document.pageCount,
+                  minHeight: 4,
+                  backgroundColor: colors.tint,
+                  color: colors.ink,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              '${document.currentPage} / ${document.pageCount} 页',
+              style: context.texts.bodySmall!.copyWith(
+                fontSize: 11.5,
+                fontFeatures: AppNumerals.tabular,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          ready == 0
+              ? '文本解析中，问答将先使用已就绪页面。'
+              : '已解析 $ready 页；其余页后台处理中。',
+          style: context.texts.bodySmall!.copyWith(fontSize: 11.5),
+        ),
+        const SizedBox(height: Space.xl),
+        Text(
+          '需要时再启用',
+          style: context.texts.bodySmall!.copyWith(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 8),
+        _ModeOption(
+          icon: QIcons.textbook,
+          title: '教材自学',
+          description: '设定页段与目标，按“阅读—回忆—核对”推进。',
+          onTap: () => c.setLearningMode(DocumentKind.textbook),
+        ),
+        const SizedBox(height: 8),
+        _ModeOption(
+          icon: QIcons.paper,
+          title: '论文精读',
+          description: '逐页核对问题、证据、论证与局限。',
+          onTap: () => c.setLearningMode(DocumentKind.paper),
+        ),
+        const SizedBox(height: Space.lg),
+        Text(
+          '问答与笔记始终可用：${c.replies.length} 条问答 · ${c.notes.length} 条笔记',
+          style: context.texts.bodySmall!.copyWith(fontSize: 11.5),
+        ),
+      ],
     );
   }
 
@@ -435,7 +561,7 @@ class _LearningPanelState extends State<LearningPanel>
           alignment: Alignment.centerLeft,
           child: OutlinedButton.icon(
             onPressed: _blocked ? null : () => _editSession(createNew: true),
-            icon: const Icon(Icons.add_rounded, size: 17),
+            icon: const QIcon(QIcons.add, size: IconSizes.sm),
             label: const Text('开始另一小节'),
           ),
         ),
@@ -468,10 +594,10 @@ class _LearningPanelState extends State<LearningPanel>
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         AccentIcon(
-                          icon: Icons.flag_outlined,
+                          icon: QIcons.milestone,
                           accent: context.colors.blueAccent,
                           size: 30,
-                          iconSize: 17,
+                          iconSize: IconSizes.sm,
                         ),
                         const SizedBox(width: 10),
                         Text(
@@ -485,7 +611,7 @@ class _LearningPanelState extends State<LearningPanel>
                     ),
                     const SizedBox(height: 14),
                     Text(
-                      '设定页段与目标 → 独立回忆作答 → AI 对照原文核对',
+                      '设定页段与目标 → 独立作答 → 对照原文核对',
                       textAlign: TextAlign.center,
                       style: context.texts.bodySmall!.copyWith(
                         fontSize: 13,
@@ -500,12 +626,12 @@ class _LearningPanelState extends State<LearningPanel>
                       children: [
                         FilledButton.icon(
                           onPressed: _blocked ? null : () => _editSession(),
-                          icon: const Icon(Icons.add_rounded, size: 17),
+                          icon: const QIcon(QIcons.add, size: IconSizes.sm),
                           label: const Text('设定本节目标'),
                         ),
                         OutlinedButton.icon(
                           onPressed: _blocked ? null : _startCurrentPage,
-                          icon: const Icon(Icons.play_arrow_rounded, size: 17),
+                          icon: const QIcon(QIcons.play, size: IconSizes.sm),
                           label: const Text('直接学习当前页'),
                         ),
                       ],
@@ -540,9 +666,9 @@ class _LearningPanelState extends State<LearningPanel>
               PopupMenuButton<String>(
                 tooltip: '本节操作',
                 enabled: !_blocked,
-                icon: Icon(
-                  Icons.more_horiz_rounded,
-                  size: 18,
+                icon: QIcon(
+                  QIcons.more,
+                  size: IconSizes.md,
                   color: c.inkMuted,
                 ),
                 onSelected: (value) {
@@ -566,7 +692,7 @@ class _LearningPanelState extends State<LearningPanel>
                     value: 'edit',
                     child: Row(
                       children: [
-                        Icon(Icons.edit_outlined, size: 16, color: c.inkMuted),
+                        QIcon(QIcons.edit, size: IconSizes.sm, color: c.inkMuted),
                         const SizedBox(width: 8),
                         const Text('编辑学习目标'),
                       ],
@@ -576,9 +702,9 @@ class _LearningPanelState extends State<LearningPanel>
                     value: 'jump',
                     child: Row(
                       children: [
-                        Icon(
-                          Icons.open_in_new_rounded,
-                          size: 16,
+                        QIcon(
+                          QIcons.external,
+                          size: IconSizes.sm,
                           color: c.inkMuted,
                         ),
                         const SizedBox(width: 8),
@@ -590,9 +716,9 @@ class _LearningPanelState extends State<LearningPanel>
                     value: 'refine',
                     child: Row(
                       children: [
-                        Icon(
-                          Icons.auto_awesome_outlined,
-                          size: 16,
+                        QIcon(
+                          QIcons.ai,
+                          size: IconSizes.sm,
                           color: c.inkMuted,
                         ),
                         const SizedBox(width: 8),
@@ -691,10 +817,10 @@ class _LearningPanelState extends State<LearningPanel>
         Row(
           children: [
             AccentIcon(
-              icon: Icons.psychology_alt_outlined,
+              icon: QIcons.recall,
               accent: c.greenAccent,
               size: 26,
-              iconSize: 15,
+              iconSize: IconSizes.sm,
             ),
             const SizedBox(width: 8),
             Expanded(child: Text('主动回忆', style: context.texts.titleSmall)),
@@ -714,7 +840,7 @@ class _LearningPanelState extends State<LearningPanel>
                     fontWeight: FontWeight.w500,
                   ),
                 ),
-                icon: const Icon(Icons.edit_outlined, size: 15),
+                icon: const QIcon(QIcons.edit, size: IconSizes.sm),
                 label: const Text('自拟'),
               ),
               TextButton.icon(
@@ -727,7 +853,7 @@ class _LearningPanelState extends State<LearningPanel>
                     fontWeight: FontWeight.w500,
                   ),
                 ),
-                icon: const Icon(Icons.refresh_rounded, size: 15),
+                icon: const QIcon(QIcons.refresh, size: IconSizes.sm),
                 label: const Text('换题'),
               ),
             ] else if (!hasQuestion)
@@ -741,7 +867,7 @@ class _LearningPanelState extends State<LearningPanel>
                     fontWeight: FontWeight.w500,
                   ),
                 ),
-                icon: const Icon(Icons.auto_awesome_outlined, size: 15),
+                icon: const QIcon(QIcons.ai, size: IconSizes.sm),
                 label: const Text('出题'),
               ),
           ],
@@ -840,11 +966,9 @@ class _LearningPanelState extends State<LearningPanel>
                   padding: const EdgeInsets.fromLTRB(12, 4, 10, 10),
                   child: Row(
                     children: [
-                      Icon(
-                        savedAnswer
-                            ? Icons.check_circle_outline_rounded
-                            : Icons.edit_outlined,
-                        size: 15,
+                      QIcon(
+                        savedAnswer ? QIcons.success : QIcons.edit,
+                        size: IconSizes.sm,
                         color: savedAnswer ? c.green : c.inkMuted,
                       ),
                       const SizedBox(width: 5),
@@ -864,7 +988,7 @@ class _LearningPanelState extends State<LearningPanel>
                           minimumSize: const Size(0, 36),
                           padding: const EdgeInsets.symmetric(horizontal: 14),
                         ),
-                        icon: const Icon(Icons.fact_check_outlined, size: 16),
+                        icon: const QIcon(QIcons.verify, size: IconSizes.sm),
                         label: const Text('核对作答'),
                       ),
                     ],
@@ -883,7 +1007,7 @@ class _LearningPanelState extends State<LearningPanel>
     children: [
       Row(
         children: [
-          Icon(Icons.rule_outlined, size: 18, color: context.colors.primary),
+          QIcon(QIcons.verify, size: IconSizes.md, color: context.colors.primary),
           const SizedBox(width: Space.sm),
           Expanded(child: Text('反馈与核对', style: context.texts.titleSmall)),
           AppBadge(label: '已评阅', tone: BadgeTone.primary, dense: true),
@@ -904,7 +1028,7 @@ class _LearningPanelState extends State<LearningPanel>
       const SizedBox(height: Space.sm),
       TextButton.icon(
         onPressed: () => _tabs.animateTo(1),
-        icon: const Icon(Icons.link_rounded, size: 16),
+        icon: const QIcon(QIcons.link, size: IconSizes.sm),
         label: const Text('在问答中查看引用'),
       ),
       Divider(height: Space.lg, color: context.colors.outline),
@@ -916,13 +1040,44 @@ class _LearningPanelState extends State<LearningPanel>
         onChanged: _blocked ? null : (value) => c.markForReview(value ?? false),
       ),
       const SizedBox(height: Space.sm),
-      Align(
-        alignment: Alignment.centerLeft,
-        child: OutlinedButton.icon(
-          onPressed: _blocked ? null : _retry,
-          icon: const Icon(Icons.replay_rounded, size: 16),
-          label: const Text('重新作答'),
-        ),
+      Wrap(
+        spacing: Space.sm,
+        runSpacing: Space.sm,
+        children: [
+          OutlinedButton.icon(
+            onPressed: _blocked ? null : _retry,
+            icon: const QIcon(QIcons.recall, size: IconSizes.sm),
+            label: const Text('重新作答'),
+          ),
+          OutlinedButton.icon(
+            onPressed: () {
+              final doc = c.current;
+              showCreateOrEditReviewItemDialog(
+                context,
+                study: c,
+                initialObjective: session.goal,
+                initialPrompt: session.question.isNotEmpty
+                    ? session.question
+                    : session.goal,
+                initialAnswer: session.feedback,
+                origin: ReviewOrigin(
+                  id: '',
+                  itemId: '',
+                  originKey: 'session:${session.id}',
+                  sourceType: 'session',
+                  documentId: session.documentId,
+                  documentHash: doc?.contentHash ?? '',
+                  documentTitle: doc?.title ?? '',
+                  page: session.startPage,
+                  sessionId: session.id,
+                  snapshotText: session.answer,
+                ),
+              );
+            },
+            icon: const QIcon(QIcons.review, size: IconSizes.sm),
+            label: const Text('加入复习 / 错题'),
+          ),
+        ],
       ),
     ],
   );
@@ -1006,7 +1161,7 @@ class _LearningPanelState extends State<LearningPanel>
               subtitle: Text(
                 '第 ${previous.startPage}–${previous.endPage} 页 · ${_date(previous.updatedAt)}',
               ),
-              trailing: const Icon(Icons.chevron_right_rounded, size: 18),
+              trailing: const QIcon(QIcons.chevronRight, size: IconSizes.md),
               onTap: _blocked ? null : () => c.saveSession(previous),
             ),
         ],
@@ -1028,7 +1183,7 @@ class _LearningPanelState extends State<LearningPanel>
                 children: [
                   _sectionTitle(
                     '论文导读',
-                    Icons.article_outlined,
+                    QIcons.paper,
                     accent: context.colors.blueAccent,
                   ),
                   const SizedBox(height: Space.md),
@@ -1075,7 +1230,7 @@ class _LearningPanelState extends State<LearningPanel>
                             true,
                             showReply: true,
                           ),
-                    icon: const Icon(Icons.auto_awesome_outlined, size: 17),
+                    icon: const QIcon(QIcons.ai, size: IconSizes.sm),
                     label: const Text('生成导读'),
                   ),
                 ],
@@ -1085,7 +1240,7 @@ class _LearningPanelState extends State<LearningPanel>
                 children: [
                   _sectionTitle(
                     '术语与句子',
-                    Icons.translate_outlined,
+                    QIcons.translate,
                     accent: context.colors.warmAccent,
                   ),
                   const SizedBox(height: Space.md),
@@ -1124,7 +1279,7 @@ class _LearningPanelState extends State<LearningPanel>
                             false,
                             showReply: true,
                           ),
-                    icon: const Icon(Icons.manage_search_outlined, size: 17),
+                    icon: const QIcon(QIcons.deepSearch, size: IconSizes.sm),
                     label: const Text('解释'),
                   ),
                 ],
@@ -1134,18 +1289,16 @@ class _LearningPanelState extends State<LearningPanel>
                 children: [
                   _sectionTitle(
                     '核对图表与公式',
-                    Icons.crop_outlined,
+                    QIcons.region,
                     accent: context.colors.warmAccent,
                   ),
                   const SizedBox(height: Space.sm),
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(
-                        c.selection == null
-                            ? Icons.info_outline_rounded
-                            : Icons.check_circle_outline_rounded,
-                        size: 16,
+                      QIcon(
+                        c.selection == null ? QIcons.info : QIcons.success,
+                        size: IconSizes.sm,
                         color: c.selection == null
                             ? context.colors.inkMuted
                             : context.colors.primary,
@@ -1170,7 +1323,7 @@ class _LearningPanelState extends State<LearningPanel>
                             false,
                             showReply: true,
                           ),
-                    icon: const Icon(Icons.image_search_outlined, size: 17),
+                    icon: const QIcon(QIcons.regionSearch, size: IconSizes.sm),
                     label: const Text('解释图表'),
                   ),
                 ],
@@ -1198,18 +1351,25 @@ class _LearningPanelState extends State<LearningPanel>
             width: double.infinity,
             child: OutlinedButton.icon(
               onPressed: _blocked ? null : widget.onNote,
-              icon: const Icon(Icons.edit_note_outlined, size: 17),
+              icon: const QIcon(QIcons.notes, size: IconSizes.sm),
               label: const Text('记笔记'),
             ),
           ),
           const SizedBox(height: 6),
-          const TrustNote('笔记会记录当前页与选区。', icon: Icons.shield_outlined),
+          const TrustNote('笔记会记录当前页与选区。', icon: QIcons.local),
         ],
       ),
     ),
   );
 
   Widget _questions() {
+    final bookQa = widget.bookQa;
+    if (bookQa != null && c.current?.kind == DocumentKind.textbook) {      return BookQaPanel(
+        controller: bookQa,
+        study: c,
+        onJump: widget.onJump,
+      );
+    }
     final colors = context.colors;
     return Material(
       color: Colors.transparent,
@@ -1217,17 +1377,17 @@ class _LearningPanelState extends State<LearningPanel>
         children: [
           Expanded(
             child: c.replies.isEmpty
-                ? Center(
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 320),
-                      child: const EmptyState(
-                        compact: true,
-                        icon: Icons.forum_outlined,
-                        title: '暂无问答',
-                        message: '向这份资料提问。',
+                  ? Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 320),
+                        child: const EmptyState(
+                          compact: true,
+                          icon: QIcons.qa,
+                          title: '暂无问答',
+                          message: '向这份资料提问。',
+                        ),
                       ),
-                    ),
-                  )
+                    )
                 : ListView(
                     padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
                     children: [
@@ -1302,9 +1462,9 @@ class _LearningPanelState extends State<LearningPanel>
                         child: Row(
                           children: [
                             if (!c.sending) ...[
-                              Icon(
-                                Icons.visibility_outlined,
-                                size: 15,
+                              QIcon(
+                                QIcons.visible,
+                                size: IconSizes.sm,
                                 color: colors.inkMuted,
                               ),
                               const SizedBox(width: 5),
@@ -1343,7 +1503,7 @@ class _LearningPanelState extends State<LearningPanel>
                                     fontWeight: FontWeight.w500,
                                   ),
                                 ),
-                                icon: const Icon(Icons.crop_rounded, size: 15),
+                                icon: const QIcon(QIcons.region, size: IconSizes.sm),
                                 label: const Text('问这张图'),
                               ),
                             const SizedBox(width: 6),
@@ -1358,9 +1518,9 @@ class _LearningPanelState extends State<LearningPanel>
                                   horizontal: 14,
                                 ),
                               ),
-                              icon: const Icon(
-                                Icons.arrow_upward_rounded,
-                                size: 16,
+                              icon: const QIcon(
+                                QIcons.send,
+                                size: IconSizes.sm,
                               ),
                               label: const Text('发送'),
                             ),
@@ -1433,9 +1593,9 @@ class _LearningPanelState extends State<LearningPanel>
               children: [
                 for (final source in reply.sources)
                   ActionChip(
-                    avatar: Icon(
-                      Icons.open_in_new_rounded,
-                      size: 14,
+                    avatar: QIcon(
+                      QIcons.external,
+                      size: IconSizes.sm,
                       color: c.inkMuted,
                     ),
                     label: Text('第 ${source.page} 页'),
@@ -1468,7 +1628,7 @@ class _LearningPanelState extends State<LearningPanel>
                 },
                 visualDensity: VisualDensity.compact,
                 constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                icon: const Icon(Icons.copy_outlined, size: 15),
+                icon: const QIcon(QIcons.copy, size: IconSizes.sm),
               ),
             ],
           ),
@@ -1504,7 +1664,7 @@ class _LearningPanelState extends State<LearningPanel>
                 IconButton(
                   onPressed: _blocked ? null : widget.onNote,
                   tooltip: '新建笔记',
-                  icon: const Icon(Icons.add_rounded, size: 20),
+                  icon: const QIcon(QIcons.add, size: IconSizes.md),
                 ),
               ],
             ),
@@ -1519,7 +1679,7 @@ class _LearningPanelState extends State<LearningPanel>
             decoration: InputDecoration(
               hintText: '搜索笔记',
               isDense: true,
-              prefixIcon: const Icon(Icons.search_rounded, size: 18),
+              prefixIcon: const QIcon(QIcons.search, size: IconSizes.md),
               suffixIcon: _noteQuery.isEmpty
                   ? null
                   : IconButton(
@@ -1528,7 +1688,7 @@ class _LearningPanelState extends State<LearningPanel>
                         _noteSearch.clear();
                         setState(() => _noteQuery = '');
                       },
-                      icon: const Icon(Icons.close_rounded, size: 16),
+                      icon: const QIcon(QIcons.close, size: IconSizes.sm),
                     ),
             ),
           ),
@@ -1541,12 +1701,12 @@ class _LearningPanelState extends State<LearningPanel>
                     constraints: const BoxConstraints(maxWidth: 320),
                     child: EmptyState(
                       compact: true,
-                      icon: Icons.note_alt_outlined,
+                      icon: QIcons.notes,
                       title: '暂无笔记',
                       message: '框选原文，记录一条笔记。',
                       action: FilledButton.icon(
                         onPressed: _blocked ? null : widget.onNote,
-                        icon: const Icon(Icons.edit_note_outlined, size: 17),
+                        icon: const QIcon(QIcons.notes, size: IconSizes.sm),
                         label: const Text('新建笔记'),
                       ),
                     ),
@@ -1558,7 +1718,7 @@ class _LearningPanelState extends State<LearningPanel>
                     constraints: const BoxConstraints(maxWidth: 320),
                     child: EmptyState(
                       compact: true,
-                      icon: Icons.search_off_rounded,
+                      icon: QIcons.searchEmpty,
                       title: '没有匹配的笔记',
                       message: '换个关键词试试。',
                       action: TextButton(
@@ -1589,128 +1749,134 @@ class _LearningPanelState extends State<LearningPanel>
     final c = context.colors;
     return _card(
       children: [
-        SizedBox(
-          width: double.infinity,
-          height: 32,
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    _date(note.createdAt),
-                    style: context.texts.bodySmall!.copyWith(fontSize: 12),
-                  ),
-                  const SizedBox(width: Space.sm),
-                  AppBadge(label: '第 ${note.page} 页', dense: true),
-                ],
+        Row(
+          children: [
+            AppBadge(label: '第 ${note.page} 页', dense: true),
+            const SizedBox(width: Space.sm),
+            Text(
+              _date(note.createdAt),
+              style: context.texts.bodySmall!.copyWith(
+                fontSize: 12,
+                color: c.inkMuted,
+                fontFeatures: AppNumerals.tabular,
               ),
-              Positioned(
-                right: 0,
-                top: 0,
-                bottom: 0,
-                child: IconButton(
-                  tooltip: '回到原页',
-                  onPressed: _blocked ? null : () => _jumpNote(note),
-                  visualDensity: VisualDensity.compact,
-                  constraints: const BoxConstraints(
-                    minWidth: 32,
-                    minHeight: 32,
-                  ),
-                  icon: const Icon(Icons.open_in_new_rounded, size: 16),
+            ),
+            const Spacer(),
+            if (widget.onOpenNoteInWorkspace != null)
+              IconButton(
+                tooltip: '在笔记工作区中打开',
+                onPressed: () => widget.onOpenNoteInWorkspace!(note.id),
+                visualDensity: VisualDensity.compact,
+                constraints: const BoxConstraints(
+                  minWidth: 30,
+                  minHeight: 30,
                 ),
+                icon: const QIcon(QIcons.notes, size: IconSizes.sm),
               ),
-            ],
-          ),
+            IconButton(
+              tooltip: '回到原页',
+              onPressed: _blocked ? null : () => _jumpNote(note),
+              visualDensity: VisualDensity.compact,
+              constraints: const BoxConstraints(
+                minWidth: 30,
+                minHeight: 30,
+              ),
+              icon: const QIcon(QIcons.external, size: IconSizes.sm),
+            ),
+          ],
         ),
         if (note.understanding.isNotEmpty) ...[
-          const SizedBox(height: 6),
-          SizedBox(
-            width: double.infinity,
-            child: Text(
-              '我的理解',
-              textAlign: TextAlign.center,
-              style: context.texts.bodySmall!.copyWith(
-                color: c.primary,
-                fontWeight: FontWeight.w600,
-              ),
+          const SizedBox(height: 8),
+          Text(
+            '我的理解',
+            textAlign: TextAlign.start,
+            style: context.texts.bodySmall!.copyWith(
+              fontSize: 12,
+              color: c.primary,
+              fontWeight: FontWeight.w600,
             ),
           ),
           const SizedBox(height: 4),
-          SizedBox(
-            width: double.infinity,
-            child: SelectableText(
-              note.understanding,
-              textAlign: TextAlign.center,
-              style: context.texts.bodyMedium!.copyWith(
-                color: c.ink,
-                height: 1.7,
-              ),
+          SelectableText(
+            note.understanding,
+            textAlign: TextAlign.start,
+            style: context.texts.bodyMedium!.copyWith(
+              color: c.ink,
+              height: 1.65,
             ),
           ),
         ],
         if (note.question.isNotEmpty) ...[
           const SizedBox(height: Space.md),
-          Center(
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: c.surfaceRaised,
+              borderRadius: BorderRadius.circular(Radii.sm),
+              border: Border.all(color: c.outline),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  width: 6,
-                  height: 6,
-                  decoration: BoxDecoration(
-                    color: c.inkMuted,
-                    shape: BoxShape.circle,
-                  ),
+                Row(
+                  children: [
+                    QIcon(QIcons.qa, size: 12, color: c.inkMuted),
+                    const SizedBox(width: 5),
+                    Text(
+                      '还没解决的问题',
+                      style: context.texts.bodySmall!.copyWith(
+                        fontSize: 12,
+                        color: c.inkMuted,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 5),
-                Text(
-                  '还没解决的问题',
-                  style: context.texts.bodySmall!.copyWith(
-                    color: c.inkMuted,
-                    fontWeight: FontWeight.w600,
+                const SizedBox(height: 4),
+                SelectableText(
+                  note.question,
+                  textAlign: TextAlign.start,
+                  style: context.texts.bodyMedium!.copyWith(
+                    color: c.ink,
+                    height: 1.6,
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 4),
-          SizedBox(
-            width: double.infinity,
-            child: SelectableText(
-              note.question,
-              textAlign: TextAlign.center,
-              style: context.texts.bodyMedium!.copyWith(
-                color: c.ink,
-                height: 1.7,
-              ),
-            ),
-          ),
         ],
-        if (note.evidenceText.isNotEmpty)
+        if (note.evidenceText.isNotEmpty) ...[
+          const SizedBox(height: 6),
           Theme(
             data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
             child: ExpansionTile(
               tilePadding: EdgeInsets.zero,
-              childrenPadding: EdgeInsets.zero,
-              title: Padding(
-                padding: const EdgeInsets.only(left: 24),
-                child: Center(
-                  child: Text(
-                    '原文摘录',
-                    style: context.texts.bodySmall!.copyWith(fontSize: 12.5),
-                  ),
+              childrenPadding: const EdgeInsets.only(top: 4),
+              title: Text(
+                '原文摘录',
+                style: context.texts.bodySmall!.copyWith(
+                  fontSize: 12.5,
+                  color: c.inkMuted,
+                  fontWeight: FontWeight.w500,
                 ),
               ),
               children: [
-                SizedBox(
+                Container(
                   width: double.infinity,
+                  padding: const EdgeInsets.fromLTRB(10, 6, 8, 6),
+                  decoration: BoxDecoration(
+                    border: Border(
+                      left: BorderSide(color: c.primary, width: 2),
+                    ),
+                  ),
                   child: SelectableText(
                     note.evidenceText,
-                    textAlign: TextAlign.center,
+                    textAlign: TextAlign.start,
                     style: context.texts.bodySmall!.copyWith(
+                      fontSize: 12.5,
                       height: 1.6,
+                      color: c.inkMuted,
                       fontFeatures: AppNumerals.tabular,
                     ),
                   ),
@@ -1718,6 +1884,7 @@ class _LearningPanelState extends State<LearningPanel>
               ],
             ),
           ),
+        ],
       ],
     );
   }
@@ -1737,11 +1904,11 @@ class _LearningPanelState extends State<LearningPanel>
     ),
   );
 
-  Widget _sectionTitle(String title, IconData icon, {AppAccent? accent}) {
+  Widget _sectionTitle(String title, QIconData icon, {AppAccent? accent}) {
     final a = accent ?? context.colors.neutralAccent;
     return Row(
       children: [
-        AccentIcon(icon: icon, accent: a, size: 26, iconSize: 15),
+        AccentIcon(icon: icon, accent: a, size: 26, iconSize: IconSizes.sm),
         const SizedBox(width: 8),
         Expanded(child: Text(title, style: context.texts.titleSmall)),
       ],
@@ -1787,13 +1954,13 @@ class _StepChip extends StatelessWidget {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(
+                QIcon(
                   done
-                      ? Icons.check_rounded
+                      ? QIcons.check
                       : active
-                      ? Icons.circle
-                      : Icons.circle_outlined,
-                  size: active ? 8 : 13,
+                      ? QIcons.dot
+                      : QIcons.ring,
+                  size: IconSizes.sm,
                   color: foreground,
                 ),
                 const SizedBox(width: 5),
@@ -1808,6 +1975,78 @@ class _StepChip extends StatelessWidget {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A visible, optional study-mode entry. Choosing one changes routing only;
+/// notes, Q&A, attempts and the reading position stay attached to the document.
+class _ModeOption extends StatefulWidget {
+  const _ModeOption({
+    required this.icon,
+    required this.title,
+    required this.description,
+    required this.onTap,
+  });
+
+  final QIconData icon;
+  final String title;
+  final String description;
+  final VoidCallback onTap;
+
+  @override
+  State<_ModeOption> createState() => _ModeOptionState();
+}
+
+class _ModeOptionState extends State<_ModeOption> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return InkWell(
+      onTap: widget.onTap,
+      onHover: (value) => setState(() => _hovered = value),
+      borderRadius: BorderRadius.circular(Radii.md),
+      hoverColor: Colors.transparent,
+      child: AnimatedContainer(
+        duration: context.motion(Motion.fast),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: _hovered ? colors.surfaceRaised : Colors.transparent,
+          border: Border.all(color: colors.outline),
+          borderRadius: BorderRadius.circular(Radii.md),
+        ),
+        child: Row(
+          children: [
+            QIcon(widget.icon, size: IconSizes.md, color: colors.inkMuted),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    widget.title,
+                    style: context.texts.bodyMedium!.copyWith(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    widget.description,
+                    style: context.texts.bodySmall!.copyWith(
+                      fontSize: 12,
+                      height: 1.45,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            QIcon(QIcons.chevronRight, size: IconSizes.sm, color: colors.inkMuted),
+          ],
         ),
       ),
     );

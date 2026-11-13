@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../icons/q_icons.dart';
+
 /// Shared close affordance.
 ///
 /// Dialog headers use the 44px default; smaller inline surfaces can pass a
@@ -10,7 +12,7 @@ class AppCloseButton extends StatelessWidget {
     this.tooltip = '关闭',
     this.onPressed,
     this.size = 44,
-    this.iconSize = 24,
+    this.iconSize = IconSizes.md,
     this.color,
   });
 
@@ -25,9 +27,9 @@ class AppCloseButton extends StatelessWidget {
     return IconButton(
       tooltip: tooltip,
       onPressed: onPressed ?? () => Navigator.of(context).maybePop(),
-      constraints: BoxConstraints.tightFor(width: size, height: size),
+      constraints: BoxConstraints(minWidth: size, minHeight: size),
       padding: EdgeInsets.zero,
-      icon: Icon(Icons.close_rounded, size: iconSize, color: color),
+      icon: QIcon(QIcons.close, size: iconSize, color: color),
     );
   }
 }

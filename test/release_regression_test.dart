@@ -216,6 +216,43 @@ void main() {
     expect(request.payloadJson, contains(request.coverageNote!));
   });
 
+  test('restores an explicitly bound session instead of the latest one', () async {
+    final older = StudySession(
+      id: 'bound-session',
+      documentId: document.id,
+      startPage: 3,
+      endPage: 6,
+      goal: '日期 A 的页段',
+      minutes: 25,
+      updatedAt: DateTime(2026, 11, 1),
+    );
+    final newer = StudySession(
+      id: 'latest-session',
+      documentId: document.id,
+      startPage: 8,
+      endPage: 10,
+      goal: '日期 B 的页段',
+      minutes: 25,
+      updatedAt: DateTime(2026, 11, 2),
+    );
+    store.saveSession(older);
+    store.saveSession(newer);
+    controller.current = document;
+    controller.session = newer;
+
+    final restored = await controller.restoreSession(
+      older.id,
+      page: older.startPage,
+    );
+    expect(restored, isTrue);
+    expect(controller.session?.id, 'bound-session');
+    expect(controller.session?.goal, '日期 A 的页段');
+
+    final missing = await controller.restoreSession('deleted-session');
+    expect(missing, isFalse);
+    expect(controller.session?.id, 'bound-session');
+  });
+
   test('long guide stays within budget and includes first and last pages of its range', () {
     for (var page = 1; page <= 20; page++) {
       store.saveEvidence(
@@ -351,7 +388,7 @@ void main() {
       );
       expect(controller.session, same(before));
       expect(controller.replies, isEmpty);
-      expect(controller.error, contains('API Key'));
+      expect(controller.error, contains('认证失败'));
       expect(sent, hasLength(1));
     },
   );

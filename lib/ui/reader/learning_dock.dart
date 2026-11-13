@@ -31,48 +31,89 @@ class LearningDock extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    final learnIcon = kind == DocumentKind.textbook
-        ? Icons.menu_book_outlined
-        : Icons.article_outlined;
+    final learnIcon = switch (kind) {
+      DocumentKind.textbook => QIcons.textbook,
+      DocumentKind.paper => QIcons.paper,
+      DocumentKind.unspecified => QIcons.study,
+    };
     final items = [
       (learnIcon, '学习', 0, 0),
-      (Icons.forum_outlined, '问答', 1, replyCount),
-      (Icons.edit_note_outlined, '笔记', 2, noteCount),
+      (QIcons.qa, '问答', 1, replyCount),
+      (QIcons.notes, '笔记', 2, noteCount),
     ];
 
     if (floating) {
       final content = vertical
-          ? Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (final item in items)
-                  _VerticalDockItem(
-                    key: ValueKey('learning-dock-${item.$3}'),
-                    icon: item.$1,
-                    label: item.$2,
-                    selected: selectedIndex == item.$3,
-                    count: item.$4,
-                    onTap: () => onSelect(item.$3),
-                  ),
-              ],
-            )
-          : Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (final item in items)
-                  SizedBox(
-                    width: 72,
-                    height: 44,
-                    child: _HorizontalDockItem(
-                      key: ValueKey('learning-dock-${item.$3}'),
-                      icon: item.$1,
-                      label: item.$2,
-                      selected: selectedIndex == item.$3,
-                      count: item.$4,
-                      onTap: () => onSelect(item.$3),
+          ? SizedBox(
+              width: 48,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  if (selectedIndex != null)
+                    AnimatedPositioned(
+                      duration: context.motion(Motion.base),
+                      curve: Motion.curve,
+                      left: 0,
+                      top: selectedIndex! * 60 + 2,
+                      width: 48,
+                      height: 56,
+                      child: _indicator(c),
                     ),
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      for (final item in items)
+                        _VerticalDockItem(
+                          key: ValueKey('learning-dock-${item.$3}'),
+                          icon: item.$1,
+                          label: item.$2,
+                          selected: selectedIndex == item.$3,
+                          count: item.$4,
+                          showSelection: false,
+                          onTap: () => onSelect(item.$3),
+                        ),
+                    ],
                   ),
-              ],
+                ],
+              ),
+            )
+          : SizedBox(
+              width: 216,
+              height: 44,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  if (selectedIndex != null)
+                    AnimatedPositioned(
+                      duration: context.motion(Motion.base),
+                      curve: Motion.curve,
+                      left: selectedIndex! * 72 + 4,
+                      top: 6,
+                      width: 64,
+                      height: 32,
+                      child: _indicator(c),
+                    ),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      for (final item in items)
+                        SizedBox(
+                          width: 72,
+                          height: 44,
+                          child: _HorizontalDockItem(
+                            key: ValueKey('learning-dock-${item.$3}'),
+                            icon: item.$1,
+                            label: item.$2,
+                            selected: selectedIndex == item.$3,
+                            count: item.$4,
+                            showSelection: false,
+                            onTap: () => onSelect(item.$3),
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
             );
       return Container(
         padding: const EdgeInsets.all(4),
@@ -134,6 +175,14 @@ class LearningDock extends StatelessWidget {
             ),
     );
   }
+
+  Widget _indicator(AppColors c) => DecoratedBox(
+    decoration: BoxDecoration(
+      color: c.tint,
+      borderRadius: BorderRadius.circular(999),
+      border: Border.all(color: c.outline),
+    ),
+  );
 }
 
 class _VerticalDockItem extends StatelessWidget {
@@ -144,12 +193,14 @@ class _VerticalDockItem extends StatelessWidget {
     required this.selected,
     required this.count,
     required this.onTap,
+    this.showSelection = true,
   });
 
-  final IconData icon;
+  final QIconData icon;
   final String label;
   final bool selected;
   final int count;
+  final bool showSelection;
   final VoidCallback onTap;
 
   @override
@@ -181,10 +232,14 @@ class _VerticalDockItem extends StatelessWidget {
                     width: 48,
                     height: 56,
                     decoration: BoxDecoration(
-                      color: selected ? c.tint : Colors.transparent,
+                      color: showSelection && selected
+                          ? c.tint
+                          : Colors.transparent,
                       borderRadius: BorderRadius.circular(999),
                       border: Border.all(
-                        color: selected ? c.outline : Colors.transparent,
+                        color: showSelection && selected
+                            ? c.outline
+                            : Colors.transparent,
                       ),
                     ),
                     child: Stack(
@@ -193,7 +248,12 @@ class _VerticalDockItem extends StatelessWidget {
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(icon, size: 19, color: fg),
+                              QIcon(
+                                icon,
+                                size: IconSizes.md,
+                                color: fg,
+                                active: selected,
+                              ),
                               const SizedBox(height: 3),
                               Text(
                                 label,
@@ -246,12 +306,14 @@ class _HorizontalDockItem extends StatelessWidget {
     required this.selected,
     required this.count,
     required this.onTap,
+    this.showSelection = true,
   });
 
-  final IconData icon;
+  final QIconData icon;
   final String label;
   final bool selected;
   final int count;
+  final bool showSelection;
   final VoidCallback onTap;
 
   @override
@@ -275,10 +337,14 @@ class _HorizontalDockItem extends StatelessWidget {
               curve: Motion.curveStandard,
               margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
               decoration: BoxDecoration(
-                color: selected ? c.tint : Colors.transparent,
+                color: showSelection && selected
+                    ? c.tint
+                    : Colors.transparent,
                 borderRadius: BorderRadius.circular(999),
                 border: Border.all(
-                  color: selected ? c.outline : Colors.transparent,
+                  color: showSelection && selected
+                      ? c.outline
+                      : Colors.transparent,
                 ),
               ),
               child: Stack(
@@ -287,7 +353,12 @@ class _HorizontalDockItem extends StatelessWidget {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(icon, size: 18, color: fg),
+                        QIcon(
+                          icon,
+                          size: IconSizes.md,
+                          color: fg,
+                          active: selected,
+                        ),
                         const SizedBox(width: 6),
                         Text(
                           label,

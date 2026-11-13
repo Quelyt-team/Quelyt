@@ -290,7 +290,7 @@ class PageSurfaceState extends State<PageSurface> {
         mainAxisSize: MainAxisSize.min,
         children: [
           _ToolAction(
-            icon: Icons.crop_free_rounded,
+            icon: QIcons.region,
             label: '框选',
             tooltip: _selecting ? '退出框选（Ctrl+Shift+S）' : '框选原文（Ctrl+Shift+S）',
             active: _selecting,
@@ -299,14 +299,14 @@ class PageSurfaceState extends State<PageSurface> {
           ),
           _ToolDivider(),
           _ToolAction(
-            icon: Icons.fit_screen_rounded,
+            icon: QIcons.fit,
             label: '适应',
             tooltip: '适应窗口（Ctrl+0）',
             showLabel: !compact,
             onTap: fit,
           ),
           _ToolAction(
-            icon: Icons.rotate_right_rounded,
+            icon: QIcons.rotate,
             label: '旋转',
             tooltip: '旋转显示（Ctrl+R）',
             showLabel: !compact,
@@ -315,7 +315,7 @@ class PageSurfaceState extends State<PageSurface> {
           if (widget.selection != null) ...[
             _ToolDivider(),
             _ToolAction(
-              icon: Icons.close_rounded,
+              icon: QIcons.clear,
               label: '清除选区',
               tooltip: '清除选区（Esc）',
               showLabel: !compact,
@@ -382,7 +382,7 @@ class _ToolAction extends StatelessWidget {
     this.showLabel = true,
   });
 
-  final IconData icon;
+  final QIconData icon;
   final String label;
   final String tooltip;
   final VoidCallback onTap;
@@ -415,9 +415,9 @@ class _ToolAction extends StatelessWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(icon, size: 17, color: foreground),
+                  QIcon(icon, size: IconSizes.sm, color: foreground),
                   if (showLabel) ...[
-                    const SizedBox(width: 5),
+                    const SizedBox(width: 6),
                     Text(
                       label,
                       style: context.texts.bodySmall!.copyWith(
@@ -457,7 +457,7 @@ class _HintChip extends StatelessWidget {
     final c = context.colors;
     final mobile = MediaQuery.sizeOf(context).width < 600;
     return Container(
-      padding: const EdgeInsets.fromLTRB(10, 4, 2, 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
         color: c.surfaceRaised,
         borderRadius: BorderRadius.circular(Radii.full),
@@ -466,21 +466,22 @@ class _HintChip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.touch_app_outlined, size: 14, color: c.inkMuted),
-          const SizedBox(width: 5),
+          QIcon(QIcons.mouse, size: IconSizes.sm, color: c.inkMuted),
+          const SizedBox(width: 6),
           Flexible(
             child: Text(
               mobile ? '双指缩放 · 拖动平移' : '滚轮缩放 · 拖动平移',
-              style: context.texts.bodySmall!.copyWith(fontSize: 12.5),
+              style: context.texts.bodySmall!.copyWith(fontSize: 12),
             ),
           ),
-          if (onClose != null)
+          if (onClose != null) ...[
+            const SizedBox(width: 4),
             AppCloseButton(
               tooltip: '不再显示',
               onPressed: onClose,
-              size: 32,
-              iconSize: 16,
+              iconSize: IconSizes.sm,
             ),
+          ],
         ],
       ),
     );

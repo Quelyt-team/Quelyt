@@ -1,25 +1,33 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 
 import '../../core/models.dart';
+import '../../features/library/library_controller.dart';
+import '../../features/library/ui/library_tree.dart';
+import '../../features/notes/notes_controller.dart';
+import '../../features/notes/ui/notes_sidebar_tree.dart';
 import '../theme/tokens.dart';
 import '../widgets/app_surfaces.dart';
 import '../widgets/quelyt_mark.dart';
 import 'app_chrome.dart';
 import 'window_title_bar.dart';
 
-enum AppSection { library, review }
+enum AppSection { library, notes, schedule, review }
 
 extension AppSectionX on AppSection {
   String get label => switch (this) {
     AppSection.library => '书库',
+    AppSection.notes => '笔记',
+    AppSection.schedule => '日程',
     AppSection.review => '复习',
   };
 
   String get shortLabel => label;
 
-  IconData get icon => switch (this) {
-    AppSection.library => Icons.local_library_outlined,
-    AppSection.review => Icons.history_edu_outlined,
+  QIconData get icon => switch (this) {
+    AppSection.library => QIcons.library,
+    AppSection.notes => QIcons.notes,
+    AppSection.schedule => QIcons.schedule,
+    AppSection.review => QIcons.review,
   };
 }
 
@@ -71,10 +79,11 @@ class AppBottomNav extends StatelessWidget {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(
+                        QIcon(
                           item.icon,
-                          size: 20,
+                          size: IconSizes.md,
                           color: item == section ? c.ink : c.inkMuted,
+                          active: item == section,
                         ),
                         const SizedBox(height: 3),
                         Text(
@@ -108,8 +117,11 @@ class AppSidebar extends StatelessWidget {
     required this.onOpenSettings,
     required this.onCollapse,
     required this.documents,
+    required this.library,
     required this.libraryCount,
+    required this.notesCount,
     required this.pendingCount,
+    this.notes,
   });
 
   final AppSection section;
@@ -118,14 +130,17 @@ class AppSidebar extends StatelessWidget {
   final VoidCallback onOpenSettings;
   final VoidCallback onCollapse;
   final List<DocumentRecord> documents;
+  final LibraryController library;
+  final NotesController? notes;
   final int libraryCount;
+  final int notesCount;
   final int pendingCount;
 
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
     return Container(
-      width: 264,
+      width: 276,
       decoration: BoxDecoration(
         color: c.sidebar,
         border: Border(right: BorderSide(color: c.outline)),
@@ -134,74 +149,224 @@ class AppSidebar extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _SidebarBrand(onCollapse: onCollapse),
-          const SizedBox(height: 12),
-          _SidebarNavItem(
-            icon: Icons.library_books_outlined,
-            label: '书库',
-            selected: section == AppSection.library,
-            count: libraryCount,
-            onTap: () => onSelect(AppSection.library),
-          ),
-          _SidebarNavItem(
-            icon: Icons.history_edu_outlined,
-            label: '复习',
-            selected: section == AppSection.review,
-            count: pendingCount,
-            onTap: () => onSelect(AppSection.review),
-          ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 16, 12, 6),
-            child: Divider(height: 1, color: c.outline),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 6),
-            child: Text(
-              '最近打开',
-              style: context.texts.bodySmall!.copyWith(
-                fontSize: 12,
-                color: c.inkMuted,
-                fontWeight: FontWeight.w600,
-              ),
+            padding: const EdgeInsets.fromLTRB(12, 2, 12, 8),
+            child: _SidebarModuleSwitcher(
+              section: section,
+              pendingCount: pendingCount,
+              onSelect: onSelect,
             ),
           ),
-          Expanded(
-            child: documents.isEmpty
-                ? Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-                    child: Text(
-                      '暂无资料',
-                      style: context.texts.bodySmall!.copyWith(fontSize: 12.5),
+          if (section == AppSection.library)
+            Expanded(child: LibraryTree(controller: library))
+          else if (section == AppSection.notes && notes != null)
+            Expanded(child: NotesSidebarTree(controller: notes!))
+          else if (section == AppSection.notes)
+            const Expanded(child: SizedBox.shrink())
+          else ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
+              child: Text(
+                '最近打开',
+                style: context.texts.bodySmall!.copyWith(
+                  fontSize: 12,
+                  color: c.inkMuted,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            Expanded(
+              child: documents.isEmpty
+                  ? Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
+                      child: Text(
+                        '暂无资料',
+                        style: context.texts.bodySmall!.copyWith(fontSize: 12.5),
+                      ),
+                    )
+                  : ListView.builder(
+                      padding: EdgeInsets.zero,
+                      itemCount: documents.length,
+                      itemBuilder: (context, index) {
+                        final doc = documents[index];
+                        return _RecentDocumentRow(
+                          document: doc,
+                          onTap: () => onOpenDocument(doc),
+                        );
+                      },
                     ),
-                  )
-                : ListView.builder(
-                    padding: EdgeInsets.zero,
-                    itemCount: documents.length,
-                    itemBuilder: (context, index) {
-                      final doc = documents[index];
-                      return _RecentDocumentRow(
-                        document: doc,
-                        onTap: () => onOpenDocument(doc),
-                      );
-                    },
-                  ),
-          ),
+            ),
+          ],
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+            padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
             child: Divider(height: 1, color: c.outline),
           ),
           _SidebarSettingsRow(onTap: onOpenSettings),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            child: Text(
-              'Quelyt 0.1.0',
-              style: context.texts.labelSmall!.copyWith(
-                fontSize: 11.5,
-                letterSpacing: .2,
-                color: c.inkMuted.withValues(alpha: .8),
+          const SizedBox(height: 6),
+        ],
+      ),
+    );
+  }
+}
+
+class _SidebarModuleSwitcher extends StatelessWidget {
+  const _SidebarModuleSwitcher({
+    required this.section,
+    required this.pendingCount,
+    required this.onSelect,
+  });
+
+  final AppSection section;
+  final int pendingCount;
+  final ValueChanged<AppSection> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final items = AppSection.values;
+    final selectedIndex = items.indexOf(section).clamp(0, items.length - 1);
+    final alignX = -1.0 + (selectedIndex / (items.length - 1)) * 2.0;
+    final trackColor = c.isDark
+        ? const Color(0xFF0E0E10)
+        : const Color(0xFFEAEAE6);
+    final thumbColor = c.isDark ? const Color(0xFF28282D) : Colors.white;
+    return Container(
+      height: 36,
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: trackColor,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Stack(
+        children: [
+          AnimatedAlign(
+            duration: context.motion(const Duration(milliseconds: 220)),
+            curve: Curves.easeOutCubic,
+            alignment: Alignment(alignX, 0),
+            child: FractionallySizedBox(
+              widthFactor: 1 / items.length,
+              heightFactor: 1,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: thumbColor,
+                  borderRadius: BorderRadius.circular(7),
+                  border: c.isDark
+                      ? Border.all(
+                          color: Colors.white.withValues(alpha: .07),
+                          width: 0.5,
+                        )
+                      : null,
+                  boxShadow: c.isDark
+                      ? const [
+                          BoxShadow(
+                            color: Color(0x55000000),
+                            blurRadius: 6,
+                            offset: Offset(0, 1.5),
+                          ),
+                        ]
+                      : const [
+                          BoxShadow(
+                            color: Color(0x14000000),
+                            blurRadius: 6,
+                            offset: Offset(0, 1.5),
+                          ),
+                          BoxShadow(
+                            color: Color(0x0A000000),
+                            blurRadius: 1.5,
+                            offset: Offset(0, 0.5),
+                          ),
+                        ],
+                ),
               ),
             ),
           ),
+          Row(
+            children: [
+              for (final item in items)
+                Expanded(
+                  child: _ModuleTab(
+                    section: item,
+                    selected: section == item,
+                    badge: item == AppSection.review && pendingCount > 0,
+                    onTap: () => onSelect(item),
+                  ),
+                ),
+            ],
+          ),
         ],
+      ),
+    );
+  }
+}
+
+class _ModuleTab extends StatefulWidget {
+  const _ModuleTab({
+    required this.section,
+    required this.selected,
+    required this.badge,
+    required this.onTap,
+  });
+
+  final AppSection section;
+  final bool selected;
+  final bool badge;
+  final VoidCallback onTap;
+
+  @override
+  State<_ModuleTab> createState() => _ModuleTabState();
+}
+
+class _ModuleTabState extends State<_ModuleTab> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final textColor = widget.selected
+        ? c.ink
+        : (_hovered ? c.ink.withValues(alpha: .82) : c.inkMuted);
+    return Semantics(
+      button: true,
+      selected: widget.selected,
+      label: widget.section.label,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: widget.onTap,
+          child: Center(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                AnimatedDefaultTextStyle(
+                  duration: context.motion(const Duration(milliseconds: 180)),
+                  curve: Curves.easeOutCubic,
+                  style: context.texts.bodySmall!.copyWith(
+                    fontSize: 12.5,
+                    color: textColor,
+                    fontWeight: widget.selected
+                        ? FontWeight.w600
+                        : FontWeight.w500,
+                  ),
+                  child: Text(widget.section.label),
+                ),
+                if (widget.badge) ...[
+                  const SizedBox(width: 4),
+                  Container(
+                    width: 5,
+                    height: 5,
+                    decoration: BoxDecoration(
+                      color: c.primary,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -217,7 +382,7 @@ class _SidebarBrand extends StatelessWidget {
     return SizedBox(
       height: AppChrome.titleBarHeight,
       child: Padding(
-        padding: const EdgeInsets.only(left: 16, right: 10),
+        padding: const EdgeInsets.only(left: 20, right: 12),
         child: Row(
           children: [
             Expanded(
@@ -247,106 +412,13 @@ class _SidebarBrand extends StatelessWidget {
               onPressed: onCollapse,
               visualDensity: VisualDensity.compact,
               constraints: const BoxConstraints(
-                minWidth: 32,
-                minHeight: 32,
+                minWidth: 34,
+                minHeight: 34,
               ),
               padding: EdgeInsets.zero,
-              icon: const Icon(Icons.view_sidebar_outlined, size: 18),
+              icon: const QIcon(QIcons.sidebar, size: IconSizes.md),
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-class _SidebarNavItem extends StatefulWidget {
-  const _SidebarNavItem({
-    required this.icon,
-    required this.label,
-    required this.selected,
-    required this.onTap,
-    this.count,
-  });
-
-  final IconData icon;
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-  final int? count;
-
-  @override
-  State<_SidebarNavItem> createState() => _SidebarNavItemState();
-}
-
-class _SidebarNavItemState extends State<_SidebarNavItem> {
-  bool _hovered = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.colors;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-      child: Semantics(
-        button: true,
-        selected: widget.selected,
-        label: widget.label,
-        child: InkWell(
-          onTap: widget.onTap,
-          onHover: (value) => setState(() => _hovered = value),
-          borderRadius: BorderRadius.circular(8),
-          hoverColor: Colors.transparent,
-          child: AnimatedContainer(
-            duration: context.motion(Motion.fast),
-            height: 40,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            decoration: BoxDecoration(
-              color: widget.selected
-                  ? c.tint
-                  : (_hovered
-                        ? c.tint.withValues(alpha: .5)
-                        : Colors.transparent),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  widget.icon,
-                  size: 18,
-                  color: widget.selected ? c.ink : c.inkMuted,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    widget.label,
-                    style: context.texts.bodyMedium!.copyWith(
-                      fontSize: 14,
-                      color: widget.selected ? c.ink : c.inkMuted,
-                      fontWeight: widget.selected
-                          ? FontWeight.w600
-                          : FontWeight.w500,
-                    ),
-                  ),
-                ),
-                SizedBox(
-                  width: 28,
-                  child: Align(
-                    alignment: Alignment.centerRight,
-                    child: Text(
-                      widget.count != null && widget.count! > 0
-                          ? '${widget.count}'
-                          : '',
-                      style: context.texts.bodySmall!.copyWith(
-                        fontSize: 12,
-                        color: c.inkMuted,
-                        fontFeatures: AppNumerals.tabular,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
         ),
       ),
     );
@@ -369,7 +441,7 @@ class _SidebarSettingsRowState extends State<_SidebarSettingsRow> {
   Widget build(BuildContext context) {
     final c = context.colors;
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       child: Semantics(
         button: true,
         label: '设置',
@@ -388,13 +460,13 @@ class _SidebarSettingsRowState extends State<_SidebarSettingsRow> {
             ),
             child: Row(
               children: [
-                Icon(Icons.tune_rounded, size: 18, color: c.inkMuted),
+                QIcon(QIcons.settings, size: IconSizes.md, color: c.inkMuted),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
                     '设置',
                     style: context.texts.bodyMedium!.copyWith(
-                      fontSize: 14,
+                      fontSize: 13.5,
                       color: c.inkMuted,
                       fontWeight: FontWeight.w500,
                     ),
@@ -447,21 +519,23 @@ class _RecentDocumentRowState extends State<_RecentDocumentRow> {
         ),
         child: Row(
           children: [
-            Icon(
-              widget.document.kind == DocumentKind.textbook
-                  ? Icons.menu_book_outlined
-                  : Icons.article_outlined,
-              size: 16,
+            QIcon(
+              switch (widget.document.kind) {
+                DocumentKind.textbook => QIcons.textbook,
+                DocumentKind.paper => QIcons.paper,
+                DocumentKind.unspecified => QIcons.study,
+              },
+              size: IconSizes.sm,
               color: _hovered ? c.ink : c.inkMuted,
             ),
-            const SizedBox(width: 9),
+            const SizedBox(width: 8),
             Expanded(
               child: Text(
                 widget.document.title,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: context.texts.bodySmall!.copyWith(
-                  fontSize: 13.5,
+                  fontSize: 13,
                   color: _hovered ? c.ink : c.inkMuted,
                 ),
               ),
@@ -485,6 +559,9 @@ class UnifiedHeader extends StatelessWidget {
     this.showSidebarToggle = true,
     this.showSubtitle = true,
     this.compact = false,
+    this.leading,
+    this.titleContent,
+    this.trailing = const [],
     this.search,
     this.importAction,
   });
@@ -498,6 +575,9 @@ class UnifiedHeader extends StatelessWidget {
   final bool showSidebarToggle;
   final bool showSubtitle;
   final bool compact;
+  final Widget? leading;
+  final Widget? titleContent;
+  final List<Widget> trailing;
   final Widget? search;
   final Widget? importAction;
 
@@ -537,7 +617,7 @@ class UnifiedHeader extends StatelessWidget {
                         minHeight: 34,
                       ),
                       padding: EdgeInsets.zero,
-                      icon: const Icon(Icons.view_sidebar_outlined, size: 18),
+                      icon: const QIcon(QIcons.sidebar, size: IconSizes.md),
                     ),
                   ],
                   if (onOpenSettings != null) ...[
@@ -551,49 +631,75 @@ class UnifiedHeader extends StatelessWidget {
                         minHeight: 34,
                       ),
                       padding: EdgeInsets.zero,
-                      icon: const Icon(Icons.tune_rounded, size: 18),
+                      icon: const QIcon(QIcons.settings, size: IconSizes.md),
                     ),
                   ],
                 ],
               ),
             ),
+          if (leading != null)
+            Padding(
+              padding: EdgeInsets.only(
+                left: !sidebarOpen ? 2 : (compact ? 8 : 14),
+              ),
+              child: leading!,
+            ),
           Expanded(
-            child: WindowDragRegion(
-              child: Padding(
-                padding: EdgeInsets.symmetric(horizontal: compact ? 14 : 24),
-                child: Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: context.texts.bodyMedium!.copyWith(
-                          fontSize: compact ? 16 : 18,
-                          fontWeight: FontWeight.w600,
-                          height: 1.25,
-                          color: c.ink,
-                        ),
+            child: titleContent != null
+                ? Stack(
+                    alignment: Alignment.centerLeft,
+                    children: [
+                      const Positioned.fill(
+                        child: WindowDragRegion(child: SizedBox.expand()),
                       ),
-                    ),
-                    if (showSubtitle && !compact && subtitle.isNotEmpty) ...[
-                      const SizedBox(width: 10),
-                      Flexible(
-                        child: Text(
-                          subtitle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: context.texts.bodySmall!.copyWith(
-                            fontSize: 13,
-                            height: 1.25,
-                          ),
+                      Padding(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: compact ? 8 : (sidebarOpen ? 20 : 12),
                         ),
+                        child: titleContent!,
                       ),
                     ],
-                  ],
-                ),
-              ),
-            ),
+                  )
+                : WindowDragRegion(
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: compact ? 14 : 24,
+                      ),
+                      child: Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: context.texts.bodyMedium!.copyWith(
+                                fontSize: compact ? 16 : 18,
+                                fontWeight: FontWeight.w600,
+                                height: 1.25,
+                                color: c.ink,
+                              ),
+                            ),
+                          ),
+                          if (showSubtitle &&
+                              !compact &&
+                              subtitle.isNotEmpty) ...[
+                            const SizedBox(width: 10),
+                            Flexible(
+                              child: Text(
+                                subtitle,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: context.texts.bodySmall!.copyWith(
+                                  fontSize: 13,
+                                  height: 1.25,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
           ),
           if (search != null)
             Padding(padding: const EdgeInsets.only(right: 10), child: search!),
@@ -601,6 +707,11 @@ class UnifiedHeader extends StatelessWidget {
             Padding(
               padding: EdgeInsets.only(right: showWindowChrome ? 10 : 16),
               child: importAction!,
+            ),
+          if (trailing.isNotEmpty)
+            Padding(
+              padding: EdgeInsets.only(right: showWindowChrome ? 8 : 14),
+              child: Row(mainAxisSize: MainAxisSize.min, children: trailing),
             ),
           if (showWindowChrome) const WindowCaptionControls(),
         ],

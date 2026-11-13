@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart'
     show LicenseEntryWithLineBreaks, LicenseRegistry;
 import 'package:flutter/services.dart' show rootBundle;
@@ -18,6 +18,7 @@ Future<void> main() async {
       'Charles Weld Tesseract runtime distribution':
           'licenses/charlesw-tesseract.txt',
       'Manrope Font': 'licenses/manrope.txt',
+      'desktop_drop': 'licenses/desktop_drop.txt',
     }.entries) {
       yield LicenseEntryWithLineBreaks([
         item.key,

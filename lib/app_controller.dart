@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -10,6 +10,12 @@ import 'package:uuid/uuid.dart';
 import 'core/local_store.dart';
 import 'core/models.dart';
 import 'core/search_index.dart';
+import 'features/library/services/library_backup_service.dart';
+import 'features/notes/data/notes_repository.dart';
+import 'features/notes/models/note_models.dart';
+import 'features/review/data/review_repository.dart';
+import 'features/review/review_controller.dart';
+import 'features/review/services/review_ai_service.dart';
 import 'services/ai_gateway.dart';
 import 'services/document_service.dart';
 import 'services/ocr_service.dart';
@@ -80,6 +86,13 @@ class StudyController extends ChangeNotifier {
     required this.gateway,
     required this.ocr,
   }) {
+    noteRepository = NotesRepository(store);
+    reviewRepository = ReviewRepository(store);
+    reviewAi = ReviewAiService(gateway: gateway);
+    reviewController = ReviewController(
+      repository: reviewRepository,
+      aiService: reviewAi,
+    );
     final config = store.getSetting('provider');
     if (config != null) {
       try {
@@ -92,10 +105,26 @@ class StudyController extends ChangeNotifier {
     }
   }
 
-  static Future<StudyController> create() async {
-    final support = await getApplicationSupportDirectory();
-    final directory = Directory(p.join(support.path, 'local_study'));
+  static Future<StudyController> create({Directory? dataDirectory}) async {
+    final directory =
+        dataDirectory ??
+        Directory(p.join((await getApplicationSupportDirectory()).path, 'local_study'));
     await directory.create(recursive: true);
+    // A prepared restore is applied before the database is opened, so no
+    // reader, OCR job or import queue can be running against the old files
+    // while they are replaced. On failure the previous library is put back.
+    String? restoreError;
+    try {
+      final result = await LibraryBackupService.applyPendingRestore(
+        directory.path,
+      );
+      if (result != null && !result.applied && result.error != null) {
+        restoreError = '上次整库恢复未完成，已保留原资料库：${result.error}';
+      }
+      await LibraryBackupService.recoverInterruptedRestore(directory.path);
+    } catch (error) {
+      restoreError = '上次整库恢复未完成，已保留原资料库：$error';
+    }
     final store = LocalStore.open(directory.path);
     final ocr = OcrService();
     final documents = DocumentService(directory, store, ocr);
@@ -106,14 +135,24 @@ class StudyController extends ChangeNotifier {
       gateway: AiGateway(),
     );
     try {
+      await documents.repairManagedPaths();
+    } catch (_) {
+      /* A restore on another machine may need this only for moved paths. */
+    }
+    try {
       await documents.recoverPendingDeletions();
     } catch (_) {
       controller.error = '上次删除资料的文件清理尚未完成，重启时会再尝试。';
     }
+    if (restoreError != null) controller.error = restoreError;
     return controller;
   }
 
   final LocalStore store;
+  late final NotesRepository noteRepository;
+  late final ReviewRepository reviewRepository;
+  late final ReviewAiService reviewAi;
+  late final ReviewController reviewController;
   final DocumentService documents;
   final AiGateway gateway;
   final OcrService ocr;
@@ -194,7 +233,7 @@ class StudyController extends ChangeNotifier {
   List<PageRecord> get pages =>
       current == null ? [] : store.getPages(current!.id);
   List<StudyNote> get notes =>
-      current == null ? [] : store.getNotes(current!.id);
+      current == null ? [] : noteRepository.notesForDocument(current!.id);
   List<StudySession> get sessions =>
       current == null ? [] : store.getSessions(current!.id);
   List<Evidence> get pageEvidence =>
@@ -202,7 +241,22 @@ class StudyController extends ChangeNotifier {
   PageRecord? get currentPage =>
       current == null ? null : store.getPage(current!.id, page);
 
-  Future<void> importPath(String path, DocumentKind kind) => _track(() async {
+  /// Changes only how the current document is studied. Notes, Q&A, reading
+  /// position and submitted answers stay attached to the same document id.
+  Future<void> setLearningMode(DocumentKind kind) => _track(() async {
+    final record = current;
+    if (record == null || record.kind == kind) return;
+    final updated = store.setDocumentLearningMode(record.id, kind);
+    if (current?.id == updated.id) {
+      current = updated;
+      _emit();
+    }
+  });
+
+  Future<void> importPath(
+    String path, [
+    DocumentKind kind = DocumentKind.unspecified,
+  ]) => _track(() async {
     if (importing) return;
     importing = true;
     error = null;
@@ -239,6 +293,9 @@ class StudyController extends ChangeNotifier {
         if (latest == null || latest.contentHash != record.contentHash) {
           throw StateError('资料已删除或版本已改变。');
         }
+        if (!latest.isActive) {
+          throw StateError('资料在回收站里，恢复后才能打开。');
+        }
         final active = latest.copyWith(lastOpenedAt: DateTime.now());
         candidate = await documents.open(active);
         if (token != _generation || _disposed) {
@@ -249,7 +306,11 @@ class StudyController extends ChangeNotifier {
         current = active;
         opened = candidate;
         candidate = null;
-        store.upsertDocument(active);
+        current = store.saveReadingProgress(
+          active.id,
+          page: active.currentPage,
+          lastOpenedAt: active.lastOpenedAt,
+        );
         page = active.currentPage;
         selection = null;
         highlight = null;
@@ -279,6 +340,23 @@ class StudyController extends ChangeNotifier {
     return task;
   }
 
+  Future<bool> restoreSession(String sessionId, {int? page}) async {
+    final record = current;
+    if (_disposed || record == null) return false;
+    StudySession? target;
+    for (final candidate in store.getSessions(record.id)) {
+      if (candidate.id == sessionId) {
+        target = candidate;
+        break;
+      }
+    }
+    if (target == null) return false;
+    session = target;
+    _emit();
+    await goToPage(page ?? target.startPage);
+    return true;
+  }
+
   Future<void> goToPage(int target, {SourceRegion? region}) async {
     final document = opened;
     final record = current;
@@ -289,8 +367,17 @@ class StudyController extends ChangeNotifier {
     selection = null;
     highlight = region;
     raster = null;
-    current = record.copyWith(currentPage: page, lastOpenedAt: DateTime.now());
-    store.upsertDocument(current!);
+    try {
+      current = store.saveReadingProgress(
+        record.id,
+        page: page,
+        lastOpenedAt: DateTime.now(),
+      );
+    } catch (error) {
+      if (!_disposed) this.error = '无法保存阅读进度：$error';
+      _emit();
+      return;
+    }
     _emit();
     try {
       final result = await document.render(page);
@@ -420,6 +507,11 @@ class StudyController extends ChangeNotifier {
     if (_disposed || current?.id != value.documentId) return;
     session = value.copyWith(updatedAt: DateTime.now());
     store.saveSession(session!);
+    if (session!.needsReview ||
+        session!.attempts.any((a) => a.needsReview || a.feedback.isNotEmpty)) {
+      reviewRepository.syncSessionChecks(session!, document: current);
+      reviewController.refresh();
+    }
     _emit();
   }
 
@@ -838,21 +930,50 @@ class StudyController extends ChangeNotifier {
       });
 
   void addNote({required String understanding, required String question}) {
-    if (current == null || _disposed) return;
-    final sources = selection == null
+    final document = current;
+    if (document == null || _disposed) return;
+    final evidence = selection == null
         ? pageEvidence
         : pageEvidence.where((e) => e.region.intersects(selection!)).toList();
-    store.saveNote(
-      StudyNote(
-        id: uuid.v4(),
-        documentId: current!.id,
-        documentHash: current!.contentHash,
-        page: page,
-        region: selection ?? SourceRegion.fullPage,
-        understanding: understanding,
-        evidenceText: sources.map((e) => e.text).join('\n'),
-        question: question,
-      ),
+    var title = understanding
+        .split('\n')
+        .firstWhere((line) => line.trim().isNotEmpty, orElse: () => '')
+        .trim();
+    if (title.isEmpty) {
+      title = question
+          .split('\n')
+          .firstWhere((line) => line.trim().isNotEmpty, orElse: () => '')
+          .trim();
+    }
+    if (title.isEmpty) title = '${document.title} · 第 $page 页笔记';
+    if (title.length > 60) title = '${title.substring(0, 60)}…';
+    noteRepository.create(
+      title: title,
+      body: understanding,
+      folderId: noteRepository.folderForDocument(document.id),
+      sources: [
+        NoteSource(
+          id: uuid.v4(),
+          noteId: '',
+          documentId: document.id,
+          documentHash: document.contentHash,
+          page: page,
+          region: selection ?? SourceRegion.fullPage,
+          excerpt: evidence.map((e) => e.text).join('\n'),
+          title: document.title,
+          createdAt: DateTime.now(),
+        ),
+      ],
+      questions: question.trim().isEmpty
+          ? const []
+          : [
+              NoteQuestion(
+                id: '',
+                noteId: '',
+                text: question.trim(),
+                createdAt: DateTime.now(),
+              ),
+            ],
     );
     _emit();
   }
@@ -890,6 +1011,7 @@ class StudyController extends ChangeNotifier {
     _generation++;
     _renderGeneration++;
     gateway.close();
+    reviewController.dispose();
     try {
       await _transition;
     } catch (_) {

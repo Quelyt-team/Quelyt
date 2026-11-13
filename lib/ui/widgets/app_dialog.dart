@@ -31,7 +31,7 @@ class AppDialog extends StatelessWidget {
   final String? subtitle;
   final Widget content;
   final List<Widget> actions;
-  final IconData? icon;
+  final QIconData? icon;
   final AppAccent? accent;
   final double maxWidth;
   final Widget? headerExtra;
@@ -134,11 +134,34 @@ Future<T?> showAppDialog<T>({
   required BuildContext context,
   required WidgetBuilder builder,
   bool barrierDismissible = true,
-}) => showDialog<T>(
+}) => showGeneralDialog<T>(
   context: context,
   barrierDismissible: barrierDismissible,
+  barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
   barrierColor: Colors.black.withValues(alpha: .42),
-  builder: builder,
+  transitionDuration: context.motion(Motion.base),
+  pageBuilder: (dialogContext, animation, secondaryAnimation) =>
+      SafeArea(child: Builder(builder: builder)),
+  transitionBuilder: (dialogContext, animation, secondaryAnimation, child) {
+    final curved = CurvedAnimation(
+      parent: animation,
+      curve: Motion.curve,
+      reverseCurve: Curves.easeInCubic,
+    );
+    return FadeTransition(
+      opacity: curved,
+      child: SlideTransition(
+        position: Tween<Offset>(
+          begin: const Offset(0, 0.016),
+          end: Offset.zero,
+        ).animate(curved),
+        child: ScaleTransition(
+          scale: Tween<double>(begin: 0.975, end: 1.0).animate(curved),
+          child: child,
+        ),
+      ),
+    );
+  },
 );
 
 class DialogFieldLabel extends StatelessWidget {

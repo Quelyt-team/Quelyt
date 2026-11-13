@@ -20,6 +20,36 @@ class RenderedPage {
   final int height;
 }
 
+/// A complete copy inside the app's import area together with the hash of the
+/// bytes that were actually copied. The queue can retry a commit without
+/// reading the user's disk again, and the external original is never edited.
+class StagedImport {
+  const StagedImport({
+    required this.sourcePath,
+    required this.sourceName,
+    required this.extension,
+    required this.stagedPath,
+    required this.digest,
+    required this.sizeBytes,
+  });
+
+  final String sourcePath;
+  final String sourceName;
+  final String extension;
+  final String stagedPath;
+  final String digest;
+  final int sizeBytes;
+}
+
+class ImportCommit {
+  const ImportCommit({required this.record, required this.duplicate});
+  final DocumentRecord record;
+
+  /// True when the managed copy already existed and no new document row was
+  /// created. The caller decides whether to point at it or create a shortcut.
+  final bool duplicate;
+}
+
 /// One opened document at a time. All stored rectangles use the rendered
 /// original page orientation, never widget or screen coordinates.
 class OpenDocument {
@@ -132,41 +162,143 @@ class DocumentService {
 
   String _pageKey(String documentId, int page) => '$documentId:$page';
 
-  bool _canCommit(DocumentRecord document, int page, int revision) =>
-      !_deletedDocuments.contains(document.id) &&
-      (_pageRevisions[_pageKey(document.id, page)] ?? 0) == revision &&
-      store.getDocument(document.id)?.contentHash == document.contentHash;
+  static const supportedExtensions = {'.pdf', '.jpg', '.jpeg', '.png'};
 
-  Future<DocumentRecord> importFile(
-    String sourcePath,
-    DocumentKind kind,
-  ) async {
+  static bool isSupportedPath(String path) =>
+      supportedExtensions.contains(p.extension(path).toLowerCase());
+
+  bool _canCommit(DocumentRecord document, int page, int revision) {
+    final stored = store.getDocument(document.id);
+    return !_deletedDocuments.contains(document.id) &&
+        stored != null &&
+        stored.isActive &&
+        stored.lifecycleVersion == document.lifecycleVersion &&
+        (_pageRevisions[_pageKey(document.id, page)] ?? 0) == revision &&
+        stored.contentHash == document.contentHash;
+  }
+
+  /// Copies one source file into the app's import area with byte progress.
+  /// Nothing is registered in the library yet; a failed or cancelled copy leaves
+  /// the user's file untouched and can be retried from the staged copy.
+  Future<StagedImport> stageFile(
+    String sourcePath, {
+    String? batchId,
+    void Function(int done, int total)? onProgress,
+  }) async {
     final source = File(sourcePath);
+    if (!await source.exists()) {
+      throw FileSystemException('找不到源文件', sourcePath);
+    }
     final extension = p.extension(sourcePath).toLowerCase();
-    if (!{'.pdf', '.jpg', '.jpeg', '.png'}.contains(extension)) {
-      throw const FormatException('支持 PDF、JPG 和 PNG 文件');
+    if (!supportedExtensions.contains(extension)) {
+      throw FormatException('暂不支持 $extension 格式，支持 PDF、JPG 和 PNG。');
+    }
+    final total = await source.length();
+    if (total <= 0) throw const FormatException('文件是空的，没有导入。');
+    final staging = _managedDirectory('imports', batchId ?? 'inbox');
+    await staging.create(recursive: true);
+    final temp = File(p.join(staging.path, '${_uuid.v4()}$extension.part'));
+    var done = 0;
+    final reader = await source.open();
+    final writer = await temp.open(mode: FileMode.write);
+    var copied = false;
+    try {
+      while (true) {
+        final chunk = await reader.read(1024 * 1024);
+        if (chunk.isEmpty) break;
+        await writer.writeFrom(chunk);
+        done += chunk.length;
+        onProgress?.call(done, total);
+      }
+      await writer.flush();
+      copied = true;
+    } finally {
+      await reader.close();
+      await writer.close();
+      if (!copied) {
+        try {
+          if (await temp.exists()) await temp.delete();
+        } catch (_) {
+          /* A cancelled copy leaves only a .part file in the import area. */
+        }
+      }
+    }
+    final digest = (await sha256.bind(temp.openRead()).first).toString();
+    final target = File(
+      p.join(staging.path, '${p.basenameWithoutExtension(temp.path)}$extension'),
+    );
+    await temp.rename(target.path);
+    return StagedImport(
+      sourcePath: sourcePath,
+      sourceName: p.basename(sourcePath),
+      extension: extension,
+      stagedPath: target.path,
+      digest: digest,
+      sizeBytes: total,
+    );
+  }
+
+  /// Re-hashes an existing staged copy after an app restart before committing.
+  Future<StagedImport> adoptStaged(
+    String stagedPath, {
+    required String sourcePath,
+    required String sourceName,
+  }) async {
+    final file = File(stagedPath);
+    if (!await file.exists()) {
+      throw FileSystemException('暂存副本已被清理', stagedPath);
+    }
+    final root = p.normalize(p.absolute(directory.path));
+    final target = p.normalize(p.absolute(stagedPath));
+    if (!p.isWithin(root, target)) {
+      throw ArgumentError('Staged path escapes the app directory.');
+    }
+    final extension = p.extension(sourcePath).toLowerCase();
+    final digest = (await sha256.bind(file.openRead()).first).toString();
+    return StagedImport(
+      sourcePath: sourcePath,
+      sourceName: sourceName,
+      extension: extension,
+      stagedPath: target,
+      digest: digest,
+      sizeBytes: await file.length(),
+    );
+  }
+
+  /// Moves a verified staged copy into the managed document directory and
+  /// creates the document row. A hash match returns the existing record and
+  /// deletes the staged copy; nothing is silently duplicated or re-owned.
+  Future<ImportCommit> commitStaged(
+    StagedImport staged, {
+    String? title,
+    DocumentKind kind = DocumentKind.unspecified,
+  }) async {
+    final existing = store.findDocumentByHash(staged.digest);
+    if (existing != null) {
+      await _deleteStaged(staged.stagedPath);
+      return ImportCommit(record: existing, duplicate: true);
     }
     final id = _uuid.v4();
     final targetDirectory = _managedDirectory('documents', id);
     PdfDocument? pdf;
     try {
       await targetDirectory.create(recursive: true);
-      final target = await source.copy(
-        p.join(targetDirectory.path, 'original$extension'),
+      final target = File(
+        p.join(targetDirectory.path, 'original${staged.extension}'),
       );
-      // Hash the managed copy. The external file may have changed while the
-      // system picker was open or during the copy.
-      final digest = (await sha256.bind(target.openRead()).first).toString();
-      for (final doc in store.getDocuments()) {
-        if (doc.contentHash == digest) {
-          await _deleteManagedDirectory('documents', id);
-          return doc;
-        }
+      try {
+        await File(staged.stagedPath).rename(target.path);
+      } on FileSystemException {
+        await File(staged.stagedPath).copy(target.path);
+        await File(staged.stagedPath).delete();
       }
       var pageCount = 1;
-      if (extension == '.pdf') {
+      if (staged.extension == '.pdf') {
         pdf = await PdfDocument.openFile(target.path);
         pageCount = pdf.pages.length;
+        if (pageCount == 0) {
+          throw const FormatException('PDF 没有可读取的页面。');
+        }
       } else {
         final codec = await ui.instantiateImageCodec(
           await target.readAsBytes(),
@@ -178,14 +310,21 @@ class DocumentService {
           codec.dispose();
         }
       }
-      if (pageCount == 0) throw const FormatException('资料没有可读取的页面');
+      final now = DateTime.now();
       final record = DocumentRecord(
         id: id,
-        title: p.basenameWithoutExtension(sourcePath),
+        title: title?.trim().isNotEmpty == true
+            ? title!.trim()
+            : p.basenameWithoutExtension(staged.sourceName),
         kind: kind,
         filePath: target.path,
-        contentHash: digest,
+        contentHash: staged.digest,
         pageCount: pageCount,
+        originalName: staged.sourceName,
+        format: staged.extension.replaceFirst('.', ''),
+        sizeBytes: staged.sizeBytes,
+        createdAt: now,
+        addedAt: now,
       );
       store.importDocument(
         record,
@@ -194,12 +333,10 @@ class DocumentService {
           (index) => PageRecord(documentId: id, page: index + 1),
         ),
       );
-      return record;
+      return ImportCommit(record: record, duplicate: false);
     } catch (_) {
-      // Release the PDF file handle before removing its directory on Windows.
       await pdf?.dispose();
       pdf = null;
-      store.deleteDocument(id);
       await _deleteManagedDirectory('documents', id);
       rethrow;
     } finally {
@@ -207,9 +344,48 @@ class DocumentService {
     }
   }
 
+  /// Compatibility helper for callers that only need a document record.
+  Future<DocumentRecord> importFile(
+    String sourcePath, [
+    DocumentKind kind = DocumentKind.unspecified,
+  ]) async {
+    final staged = await stageFile(sourcePath);
+    final commit = await commitStaged(staged, kind: kind);
+    return commit.record;
+  }
+
+  Future<void> _deleteStaged(String stagedPath) async {
+    final file = File(stagedPath);
+    if (await file.exists()) await file.delete();
+  }
+
+  /// Called after a document entered or left the trash. In-flight OCR and
+  /// indexing results are allowed to finish but can no longer commit because
+  /// [_canCommit] checks the lifecycle and its version.
+  Future<void> onLifecycleChanged(String documentId) async {
+    final document = store.getDocument(documentId);
+    if (document != null && document.isActive) {
+      _deletedDocuments.remove(documentId);
+      return;
+    }
+    _deletedDocuments.add(documentId);
+    final operations = _indexOperations[documentId];
+    if (operations != null) {
+      await Future.wait(
+        operations.toList().map((task) => task.catchError((Object _) {})),
+      );
+    }
+  }
+
   Future<OpenDocument> open(DocumentRecord record) async {
-    if (_deletedDocuments.contains(record.id)) {
-      throw StateError('资料已删除。');
+    if (_deletedDocuments.contains(record.id) || !record.isActive) {
+      throw StateError(
+        record.isTrashed ? '资料在回收站里，恢复后才能打开。' : '资料已删除。',
+      );
+    }
+    final stored = store.getDocument(record.id);
+    if (stored == null || !stored.isActive) {
+      throw StateError('资料在回收站里，恢复后才能打开。');
     }
     final isPdf = p.extension(record.filePath).toLowerCase() == '.pdf';
     return OpenDocument(
@@ -452,6 +628,54 @@ class DocumentService {
     await _finishDeletion(record.id);
   }
 
+  /// First phase of a permanent purge: stop background writes and record the
+  /// intent so a crash between the database transaction and file deletion is
+  /// repaired on the next launch. The database rows are removed by the caller.
+  Future<void> preparePurge(String documentId) async {
+    _managedDirectory('documents', documentId);
+    _deletedDocuments.add(documentId);
+    store.setSetting('pending-delete:$documentId', 'true');
+    final operations = _indexOperations[documentId];
+    if (operations != null) {
+      await Future.wait(
+        operations.toList().map((task) => task.catchError((Object _) {})),
+      );
+    }
+  }
+
+  /// Second phase: release the managed copy and render cache. Only paths inside
+  /// the app's own directory are ever constructed here.
+  Future<void> finishPurge(DocumentRecord record) async {
+    _deletedDocuments.add(record.id);
+    await _finishDeletion(record.id);
+  }
+
+  /// After a restore on another machine or after the managed directory moved,
+  /// database rows can still point at the old absolute path. This rebuilds the
+  /// path from the stable document id when the managed copy exists locally.
+  Future<int> repairManagedPaths() async {
+    var repaired = 0;
+    for (final document in store.getDocuments(includeTrashed: true)) {
+      var extension = p.extension(document.filePath).toLowerCase();
+      if (extension.isEmpty && document.format.isNotEmpty) {
+        extension = '.${document.format.toLowerCase()}';
+      }
+      final expected = p.join(
+        directory.path,
+        'documents',
+        document.id,
+        'original$extension',
+      );
+      if (p.equals(p.normalize(expected), p.normalize(document.filePath))) {
+        continue;
+      }
+      if (!await File(expected).exists()) continue;
+      store.saveDocumentRecord(document.copyWith(filePath: expected));
+      repaired++;
+    }
+    return repaired;
+  }
+
   /// Incomplete filesystem deletions are retried on the next app launch.
   Future<void> recoverPendingDeletions() async {
     for (final key in store.getSettings(prefix: 'pending-delete:').keys) {
@@ -461,6 +685,8 @@ class DocumentService {
       store.deleteDocument(id);
       await _finishDeletion(id);
     }
+    // Empty import staging folders left by a cancelled batch are safe to drop;
+    // the managed originals live in `documents/` and are never touched here.
   }
 
   Future<void> _finishDeletion(String id) async {

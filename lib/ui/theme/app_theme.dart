@@ -67,6 +67,9 @@ ThemeData buildAppTheme(Brightness brightness) {
   return ThemeData(
     useMaterial3: true,
     brightness: brightness,
+    // A quiet flat ripple matches the monochrome chrome. It also avoids the
+    // Impeller sparkle shader, which is unavailable in headless widget tests.
+    splashFactory: InkRipple.splashFactory,
     colorScheme: scheme,
     extensions: [c],
     scaffoldBackgroundColor: c.canvas,
@@ -80,7 +83,7 @@ ThemeData buildAppTheme(Brightness brightness) {
     splashColor: c.primary.withValues(alpha: .10),
     textTheme: text,
     primaryTextTheme: text.apply(bodyColor: c.onPrimary),
-    iconTheme: IconThemeData(color: c.inkMuted, size: 20),
+    iconTheme: IconThemeData(color: c.inkMuted, size: IconSizes.md),
     fontFamilyFallback: _fallbackFonts,
     visualDensity: VisualDensity.standard,
     materialTapTargetSize: MaterialTapTargetSize.padded,
@@ -93,7 +96,7 @@ ThemeData buildAppTheme(Brightness brightness) {
       centerTitle: false,
       toolbarHeight: 52,
       titleTextStyle: text.titleMedium,
-      iconTheme: IconThemeData(color: c.inkMuted, size: 19),
+      iconTheme: IconThemeData(color: c.inkMuted, size: IconSizes.md),
     ),
     navigationBarTheme: NavigationBarThemeData(
       height: 56,
@@ -115,7 +118,7 @@ ThemeData buildAppTheme(Brightness brightness) {
       ),
       iconTheme: WidgetStateProperty.resolveWith(
         (states) => IconThemeData(
-          size: 22,
+          size: IconSizes.md,
           color: states.contains(WidgetState.selected) ? c.primary : c.inkMuted,
         ),
       ),
@@ -128,8 +131,8 @@ ThemeData buildAppTheme(Brightness brightness) {
       indicatorShape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(Radii.sm),
       ),
-      selectedIconTheme: IconThemeData(color: c.primary, size: 22),
-      unselectedIconTheme: IconThemeData(color: c.inkMuted, size: 22),
+      selectedIconTheme: IconThemeData(color: c.primary, size: IconSizes.md),
+      unselectedIconTheme: IconThemeData(color: c.inkMuted, size: IconSizes.md),
       selectedLabelTextStyle: text.labelMedium!.copyWith(color: c.primary),
       unselectedLabelTextStyle: text.labelMedium!.copyWith(color: c.inkMuted),
     ),
@@ -171,7 +174,7 @@ ThemeData buildAppTheme(Brightness brightness) {
         elevation: const WidgetStatePropertyAll(0),
         minimumSize: const WidgetStatePropertyAll(Size(0, 38)),
         padding: const WidgetStatePropertyAll(
-          EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          EdgeInsets.symmetric(horizontal: 14, vertical: 9),
         ),
         shape: WidgetStatePropertyAll(
           RoundedRectangleBorder(borderRadius: BorderRadius.circular(Radii.sm)),
@@ -186,7 +189,7 @@ ThemeData buildAppTheme(Brightness brightness) {
         overlayColor: overlay,
         minimumSize: const WidgetStatePropertyAll(Size(0, 38)),
         padding: const WidgetStatePropertyAll(
-          EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          EdgeInsets.symmetric(horizontal: 14, vertical: 9),
         ),
         shape: WidgetStatePropertyAll(
           RoundedRectangleBorder(borderRadius: BorderRadius.circular(Radii.sm)),
@@ -202,20 +205,20 @@ ThemeData buildAppTheme(Brightness brightness) {
         overlayColor: overlay,
         minimumSize: const WidgetStatePropertyAll(Size(0, 36)),
         padding: const WidgetStatePropertyAll(
-          EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          EdgeInsets.symmetric(horizontal: 10, vertical: 7),
         ),
         shape: WidgetStatePropertyAll(
           RoundedRectangleBorder(borderRadius: BorderRadius.circular(Radii.sm)),
         ),
         textStyle: WidgetStatePropertyAll(text.labelLarge),
-        iconSize: const WidgetStatePropertyAll(17),
+        iconSize: const WidgetStatePropertyAll(IconSizes.sm),
       ),
     ),
     iconButtonTheme: IconButtonThemeData(
       style: ButtonStyle(
         minimumSize: const WidgetStatePropertyAll(Size(40, 40)),
         padding: const WidgetStatePropertyAll(EdgeInsets.all(8)),
-        iconSize: const WidgetStatePropertyAll(20),
+        iconSize: const WidgetStatePropertyAll(IconSizes.md),
         foregroundColor: WidgetStateProperty.resolveWith(
           (states) => states.contains(WidgetState.disabled)
               ? c.inkMuted.withValues(alpha: .45)

@@ -1,15 +1,21 @@
 import 'dart:math' as math;
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../app_controller.dart';
+import '../../core/models.dart';
+import '../../features/library/services/library_backup_service.dart';
+import '../../features/library/services/library_storage_service.dart';
 import '../../services/ai_gateway.dart';
+import '../../services/file_reveal.dart';
 import '../../services/ocr_service.dart';
 import '../dialogs/app_dialogs.dart';
 import '../theme/appearance.dart';
 import '../theme/tokens.dart';
 import '../widgets/app_close_button.dart';
+import '../widgets/app_dialog.dart';
 import '../widgets/app_surfaces.dart';
 import '../widgets/quelyt_mark.dart';
 
@@ -24,12 +30,12 @@ extension SettingsSectionX on SettingsSection {
     SettingsSection.about => '关于',
   };
 
-  IconData get icon => switch (this) {
-    SettingsSection.general => Icons.tune_rounded,
-    SettingsSection.models => Icons.hub_outlined,
-    SettingsSection.ocr => Icons.document_scanner_outlined,
-    SettingsSection.privacy => Icons.shield_outlined,
-    SettingsSection.about => Icons.info_outline_rounded,
+  QIconData get icon => switch (this) {
+    SettingsSection.general => QIcons.settings,
+    SettingsSection.models => QIcons.model,
+    SettingsSection.ocr => QIcons.ocr,
+    SettingsSection.privacy => QIcons.local,
+    SettingsSection.about => QIcons.info,
   };
 }
 
@@ -79,8 +85,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
   bool? _ocrAvailable;
   bool _hidden = true;
   bool _saving = false;
+  bool _testing = false;
   bool _allowClose = false;
   bool _compactDetail = false;
+  String _savedKeyDraft = '';
   String? _error;
   String? _notice;
 
@@ -130,7 +138,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
   bool get _dirty {
     final saved = c.settings;
     final current = _settings;
-    return _key.text.trim().isNotEmpty ||
+    return _key.text.trim().isNotEmpty &&
+            _key.text.trim() != _savedKeyDraft ||
         current.provider != saved.provider ||
         current.baseUrl != saved.baseUrl ||
         current.model != saved.model ||
@@ -185,11 +194,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
     });
     try {
       await c.saveSettings(_settings, _key.text);
-      _key.clear();
+      _savedKeyDraft = _key.text.trim();
       await _checkKey();
       if (mounted) {
         setState(() {
-          _notice = '已保存 · ${_time(DateTime.now())}';
+          _notice = '已保存（密钥已写入系统凭据）';
         });
       }
     } catch (error) {
@@ -199,9 +208,45 @@ class _SettingsDialogState extends State<SettingsDialog> {
     }
   }
 
+  Future<void> _testConnection() async {
+    if (_testing || _saving) return;
+    if (!(_form.currentState?.validate() ?? false)) {
+      setState(() => _error = '请先修正标红的字段。');
+      return;
+    }
+    if (!_keyDraft && _hasKey != true) {
+      setState(() => _error = '请先填写并保存 API Key。');
+      return;
+    }
+    setState(() {
+      _testing = true;
+      _error = null;
+      _notice = null;
+    });
+    try {
+      if (_keyDraft) {
+        await c.saveSettings(_settings, _key.text);
+        _savedKeyDraft = _key.text.trim();
+        await _checkKey();
+      }
+      final result = await c.gateway.testConnection(_settings);
+      if (mounted) {
+        setState(
+          () => _notice = '$result（已发送最小测试请求）',
+        );
+      }
+    } catch (error) {
+      if (mounted) setState(() => _error = '连接测试失败：$error');
+    } finally {
+      if (mounted) setState(() => _testing = false);
+    }
+  }
+
   Future<void> _deleteKey() async {
     try {
       await c.gateway.deleteKey(_settings);
+      _key.clear();
+      _savedKeyDraft = '';
       await _checkKey();
       if (mounted) setState(() => _notice = '密钥已删除。');
     } catch (error) {
@@ -243,9 +288,459 @@ class _SettingsDialogState extends State<SettingsDialog> {
     setState(() => _notice = '数据位置已复制。');
   }
 
-  String _time(DateTime value) =>
-      '${value.hour.toString().padLeft(2, '0')}:'
-      '${value.minute.toString().padLeft(2, '0')}';
+  Future<void> _backupLibrary({bool includeTrash = true}) async {
+    try {
+      final destination = await FilePicker.platform.getDirectoryPath(
+        dialogTitle: '选择整库备份位置',
+      );
+      if (destination == null || !mounted) return;
+      setState(() => _notice = '正在备份整库…');
+      final report = await LibraryBackupService(
+        store: c.store,
+        documents: c.documents,
+      ).create(destination, includeTrash: includeTrash);
+      if (!mounted) return;
+      setState(() => _notice = report.summary);
+      await showAppDialog<void>(
+        context: context,
+        builder: (context) => AppDialog(
+          title: '备份完成',
+          subtitle: report.summary,
+          icon: QIcons.archive,
+          maxWidth: 560,
+          actions: [
+            TextButton(
+              onPressed: () => FileReveal.open(report.path),
+              child: const Text('打开位置'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('完成'),
+            ),
+          ],
+          content: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SelectableText(
+                report.path,
+                style: context.texts.bodySmall!.copyWith(fontSize: 12),
+              ),
+              const SizedBox(height: Space.md),
+              Text(
+                '含原件与全部学习数据（不含 API Key）；'
+                '${report.includeTrash ? '含回收站' : '不含回收站'}。',
+                style: context.texts.bodySmall!.copyWith(height: 1.6),
+              ),
+              if (report.warnings.isNotEmpty) ...[
+                const SizedBox(height: Space.md),
+                for (final warning in report.warnings.take(8))
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 3),
+                    child: Text(
+                      warning,
+                      style: context.texts.bodySmall!.copyWith(
+                        fontSize: 11.5,
+                        color: context.colors.danger,
+                      ),
+                    ),
+                  ),
+              ],
+            ],
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _notice = '备份失败：$error');
+    }
+  }
+
+  Future<void> _showStorage() async {
+    final service = LibraryStorageService(
+      store: c.store,
+      documents: c.documents,
+    );
+    LibraryStorageReport report;
+    try {
+      report = await service.measure();
+    } catch (error) {
+      if (mounted) setState(() => _notice = '无法读取存储占用：$error');
+      return;
+    }
+    if (!mounted) return;
+    final action = await showAppDialog<String>(
+      context: context,
+      builder: (context) => AppDialog(
+        title: '存储占用',
+        subtitle: '清理仅删除可重建缓存，不影响原件与数据。',
+        icon: QIcons.archive,
+        maxWidth: 620,
+        actions: [
+          if (report.rebuildableBytes > 0)
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'cache'),
+              child: const Text('清理可重建缓存'),
+            ),
+          if (report.hasMissingOriginals)
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'repair'),
+              child: const Text('修复缺失原件…'),
+            ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, 'close'),
+            child: const Text('关闭'),
+          ),
+        ],
+        content: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _storageLine(context, '原件', formatBytes(report.originalsBytes)),
+            _storageLine(
+              context,
+              '可重建缓存',
+              formatBytes(report.rebuildableBytes),
+            ),
+            _storageLine(context, '数据库', formatBytes(report.databaseBytes)),
+            _storageLine(
+              context,
+              '回收站中的资料',
+              '${report.trashedDocuments} 份 · ${formatBytes(report.trashBytes)}',
+            ),
+            _storageLine(
+              context,
+              '合计',
+              formatBytes(report.totalBytes),
+              emphasized: true,
+            ),
+            const SizedBox(height: Space.md),
+            if (report.hasMissingOriginals)
+              AppCallout(
+                tone: CalloutTone.warning,
+                title: '${report.missingOriginals.length} 份资料缺少托管原件',
+                message: '可按 SHA-256 哈希重新链接；内容不符的文件请作为新资料导入。',
+              )
+            else
+              const TrustNote(
+                '原件与数据完整。',
+                icon: QIcons.local,
+              ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (action == 'cache') {
+      await _clearRebuildableCache(service);
+    } else if (action == 'repair') {
+      await _repairMissingOriginals(service, report.missingOriginals);
+    }
+  }
+
+  Future<void> _clearRebuildableCache(LibraryStorageService service) async {
+    if (c.indexing || c.sending) {
+      setState(() => _notice = '请等待当前识别或请求结束，再清理缓存。');
+      return;
+    }
+    final confirmed = await showAppDialog<bool>(
+      context: context,
+      builder: (context) => AppDialog(
+        title: '清理可重建缓存？',
+        maxWidth: 520,
+        actions: [
+          DialogActions.cancel(context),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('清理'),
+          ),
+        ],
+        content: const DialogBodyText(
+          '仅删除缩略图、页面渲染与 OCR 临时文件，原件与学习数据不受影响。',
+        ),
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final freed = await service.clearRebuildableCache();
+    if (!mounted) return;
+    setState(() => _notice = '已清理 ${formatBytes(freed)} 可重建缓存。');
+  }
+
+  Future<void> _repairMissingOriginals(
+    LibraryStorageService service,
+    List<DocumentRecord> missing,
+  ) async {
+    if (missing.isEmpty) return;
+    final proceed = await showAppDialog<bool>(
+      context: context,
+      builder: (context) => AppDialog(
+        title: '修复缺失原件',
+        subtitle: '${missing.length} 份资料缺少托管副本。',
+        icon: QIcons.restore,
+        maxWidth: 620,
+        actions: [
+          DialogActions.cancel(context),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('选择原件…'),
+          ),
+        ],
+        content: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final document in missing.take(8))
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text(
+                  document.title,
+                  style: context.texts.bodySmall!.copyWith(fontSize: 12),
+                ),
+              ),
+            if (missing.length > 8)
+              Text(
+                '还有 ${missing.length - 8} 份未列出。',
+                style: context.texts.bodySmall!.copyWith(fontSize: 11.5),
+              ),
+            const SizedBox(height: Space.md),
+            const TrustNote(
+              '仅在 SHA-256 一致时写回。',
+              icon: QIcons.verify,
+            ),
+          ],
+        ),
+      ),
+    );
+    if (proceed != true || !mounted) return;
+    final picked = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['pdf', 'png', 'jpg', 'jpeg'],
+      withData: false,
+      allowMultiple: false,
+      dialogTitle: '选择用于修复的原件',
+    );
+    final path = picked?.files.single.path;
+    if (path == null || !mounted) return;
+    var repaired = 0;
+    String? firstError;
+    for (final document in missing) {
+      try {
+        await service.relinkOriginal(document, path);
+        repaired++;
+      } catch (error) {
+        firstError ??= '$error';
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _notice = repaired > 0
+          ? '已按哈希重新链接 $repaired 份原件。'
+          : '没有资料匹配这份文件：${firstError ?? '内容不一致'}';
+    });
+  }
+
+  Widget _storageLine(
+    BuildContext context,
+    String label,
+    String value, {
+    bool emphasized = false,
+  }) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    decoration: BoxDecoration(
+      color: emphasized
+          ? context.colors.tint
+          : context.colors.surfaceRaised,
+      borderRadius: BorderRadius.circular(Radii.sm),
+    ),
+    child: Row(
+      children: [
+        Expanded(
+          child: Text(
+            label,
+            style: context.texts.bodySmall!.copyWith(
+              fontSize: 12.5,
+              fontWeight: emphasized ? FontWeight.w600 : FontWeight.w400,
+            ),
+          ),
+        ),
+        Text(
+          value,
+          style: context.texts.bodySmall!.copyWith(
+            fontSize: 12.5,
+            color: context.colors.ink,
+            fontFeatures: AppNumerals.tabular,
+          ),
+        ),
+      ],
+    ),
+  );
+  Future<void> _restoreLibrary() async {
+    try {
+      final package = await FilePicker.platform.getDirectoryPath(
+        dialogTitle: '选择 Quelyt 备份文件夹',
+      );
+      if (package == null || !mounted) return;
+      final validation = await LibraryBackupService.validate(package);
+      if (!mounted) return;
+      if (!validation.ok) {
+        await showAppDialog<void>(
+          context: context,
+          builder: (context) => AppDialog(
+            title: '这份备份不能恢复',
+            icon: QIcons.warning,
+            accent: AppAccent(
+              color: context.colors.danger,
+              tint: context.colors.dangerTint,
+            ),
+            maxWidth: 620,
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('关闭'),
+              ),
+            ],
+            content: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (final error in validation.errors.take(10))
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Text(
+                      error,
+                      style: context.texts.bodySmall!.copyWith(
+                        color: context.colors.danger,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+        return;
+      }
+      final confirmed = await showAppDialog<bool>(
+        context: context,
+        builder: (context) => AppDialog(
+          title: '准备整库恢复？',
+          subtitle: package,
+          icon: QIcons.restore,
+          maxWidth: 620,
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('准备恢复'),
+            ),
+          ],
+          content: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                '${validation.documents} 份资料 · 数据库版本 v${validation.schemaVersion}'
+                '${validation.createdAt.isEmpty ? '' : ' · ${validation.createdAt}'}',
+                style: context.texts.bodySmall!.copyWith(fontSize: 12.5),
+              ),
+              const SizedBox(height: Space.md),
+              const TrustNote(
+                '校验后将于下次启动时替换资料库；原库移至 pre-restore 目录，失败自动回滚。',
+                icon: QIcons.info,
+              ),
+              if (validation.warnings.isNotEmpty) ...[
+                const SizedBox(height: Space.sm),
+                for (final warning in validation.warnings.take(6))
+                  Text(
+                    warning,
+                    style: context.texts.bodySmall!.copyWith(
+                      fontSize: 11.5,
+                      color: context.colors.warm,
+                    ),
+                  ),
+              ],
+            ],
+          ),
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+      await LibraryBackupService.prepareRestore(
+        package,
+        c.documents.directory.path,
+      );
+      if (!mounted) return;
+      setState(() => _notice = '已准备整库恢复，请重启应用生效。');
+      await showAppDialog<void>(
+        context: context,
+        builder: (context) => AppDialog(
+          title: '恢复已准备',
+          icon: QIcons.restore,
+          maxWidth: 520,
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('知道了'),
+            ),
+          ],
+          content: const DialogBodyText(
+            '备份已就绪。完全退出并重启 Quelyt 后生效，原库保留在 pre-restore 目录。',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _notice = '恢复准备失败：$error');
+    }
+  }
+
+  Future<void> _showLastRestore() async {
+    final result = await LibraryBackupService.readLastResult(
+      c.documents.directory.path,
+    );
+    if (!mounted) return;
+    await showAppDialog<void>(
+      context: context,
+      builder: (context) => AppDialog(
+        title: '上次恢复结果',
+        icon: QIcons.info,
+        maxWidth: 560,
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('关闭'),
+          ),
+        ],
+        content: result == null
+            ? const DialogBodyText('还没有执行过整库恢复。')
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  DialogBodyText(
+                    result['applied'] == true ? '恢复已应用。' : '恢复未应用。',
+                  ),
+                  if (result['error'] != null) ...[
+                    const SizedBox(height: Space.sm),
+                    Text(
+                      '${result['error']}',
+                      style: context.texts.bodySmall!.copyWith(
+                        color: context.colors.danger,
+                      ),
+                    ),
+                  ],
+                  if (result['backupPath'] != null) ...[
+                    const SizedBox(height: Space.md),
+                    SelectableText(
+                      '备份：${result['backupPath']}',
+                      style: context.texts.bodySmall!.copyWith(fontSize: 11.5),
+                    ),
+                  ],
+                  if (result['preRestorePath'] != null)
+                    SelectableText(
+                      '恢复前原库：${result['preRestorePath']}',
+                      style: context.texts.bodySmall!.copyWith(fontSize: 11.5),
+                    ),
+                ],
+              ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -349,7 +844,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
               IconButton(
                 tooltip: '返回设置分区',
                 onPressed: () => setState(() => _compactDetail = false),
-                icon: const Icon(Icons.arrow_back_rounded, size: 20),
+                icon: const QIcon(QIcons.back, size: IconSizes.md),
               )
             else
               const SizedBox(width: 16),
@@ -420,7 +915,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                 ),
                 child: Row(
                   children: [
-                    Icon(item.icon, size: 19, color: c.inkMuted),
+                    QIcon(item.icon, size: IconSizes.md, color: c.inkMuted),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
@@ -433,9 +928,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         padding: const EdgeInsets.only(right: 8),
                         child: _StatusDot(tone: _statusFor(item)!),
                       ),
-                    Icon(
-                      Icons.chevron_right_rounded,
-                      size: 18,
+                    QIcon(
+                      QIcons.chevronRight,
+                      size: IconSizes.md,
                       color: c.inkMuted,
                     ),
                   ],
@@ -500,13 +995,13 @@ class _SettingsDialogState extends State<SettingsDialog> {
       ),
       child: Row(
         children: [
-          Icon(
+          QIcon(
             _error != null
-                ? Icons.error_outline_rounded
+                ? QIcons.error
                 : _dirty && isModels
-                ? Icons.edit_outlined
-                : Icons.check_circle_outline_rounded,
-            size: 16,
+                ? QIcons.edit
+                : QIcons.success,
+            size: IconSizes.sm,
             color: _error != null ? c.danger : c.inkMuted,
           ),
           const SizedBox(width: 8),
@@ -551,7 +1046,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
         _sectionHeader(
           context,
           '通用',
-          '外观和提示只影响这台设备，改动会立即生效。',
+          '仅作用于本机，改动立即生效。',
         ),
         _row(
           context,
@@ -579,7 +1074,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
         _row(
           context,
           '原页色调',
-          description: '只改变原页显示，不影响选区与引用坐标。',
+          description: '仅调整显示，不改选区与坐标。',
           control: AppSegmentedControl(
             expand: true,
             segments: const [
@@ -634,7 +1129,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
           _sectionHeader(
             context,
             '模型服务',
-            '连接你自己的兼容 Chat Completions 服务；密钥只进系统凭据。',
+            '兼容 Chat Completions 接口；密钥只进系统凭据。',
           ),
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 12),
@@ -670,7 +1165,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
           _row(
             context,
             '服务商预设',
-            description: '切换会覆盖地址与模型，但不会清空已输入的 Key。',
+            description: '切换预设覆盖地址与模型，保留已填 Key。',
             control: AppSegmentedControl(
               expand: true,
               segments: const [
@@ -713,7 +1208,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
           _row(
             context,
             '接口地址',
-            description: '基础地址或完整端点，仅 HTTPS。',
+            description: '基础地址或完整端点（仅 HTTPS）。',
             control: TextFormField(
               controller: _url,
               keyboardType: TextInputType.url,
@@ -754,10 +1249,28 @@ class _SettingsDialogState extends State<SettingsDialog> {
           _row(
             context,
             'API Key',
-            description: _hasKey == true ? '密钥已存入系统凭据。' : '可稍后填写；阅读与笔记仍可使用。',
-            action: _hasKey == true
-                ? TextButton(
-                    onPressed: _saving ? null : _deleteKey,
+            description: _hasKey == true
+                ? '已存系统凭据；测试连接将发送最小请求。'
+                : '保存后输入框清空；可点“测试连接”验证。',
+            action: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_hasKey == true || _keyDraft)
+                  TextButton(
+                    onPressed: _saving || _testing ? null : _testConnection,
+                    style: TextButton.styleFrom(
+                      minimumSize: const Size(0, 26),
+                      padding: EdgeInsets.zero,
+                      textStyle: context.texts.bodySmall!.copyWith(
+                        fontSize: 12,
+                      ),
+                    ),
+                    child: Text(_testing ? '测试中…' : '测试连接'),
+                  ),
+                if (_hasKey == true) ...[
+                  const SizedBox(width: 10),
+                  TextButton(
+                    onPressed: _saving || _testing ? null : _deleteKey,
                     style: TextButton.styleFrom(
                       minimumSize: const Size(0, 26),
                       padding: EdgeInsets.zero,
@@ -766,8 +1279,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
                       ),
                     ),
                     child: const Text('删除密钥'),
-                  )
-                : null,
+                  ),
+                ],
+              ],
+            ),
             control: TextFormField(
               controller: _key,
               obscureText: _hidden,
@@ -783,11 +1298,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     minWidth: 34,
                     minHeight: 34,
                   ),
-                  icon: Icon(
-                    _hidden
-                        ? Icons.visibility_outlined
-                        : Icons.visibility_off_outlined,
-                    size: 17,
+                  icon: QIcon(
+                    _hidden ? QIcons.visible : QIcons.hidden,
+                    size: IconSizes.sm,
                   ),
                 ),
               ),
@@ -805,7 +1318,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
         _sectionHeader(
           context,
           '文字识别',
-          '扫描页在设备本地识别；公式与表格仍建议对照原图。',
+          '扫描页本地离线识别；公式与表格建议对照原图。',
         ),
         FutureBuilder<OcrAvailability>(
           future: _ocr,
@@ -860,7 +1373,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         _loadOcr();
                       });
                     },
-                    icon: const Icon(Icons.refresh_rounded, size: 16),
+                    icon: const QIcon(QIcons.refresh, size: IconSizes.sm),
                     label: const Text('检查引擎'),
                   ),
                 ),
@@ -869,7 +1382,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
           },
         ),
         TrustNote(
-          '识别在本机完成。需要 AI 解释时，仍先展示将发送的原文或图片。',
+          '识别全程本地；调用 AI 前会先预览发送内容。',
         ),
       ],
     );
@@ -877,15 +1390,15 @@ class _SettingsDialogState extends State<SettingsDialog> {
 
   Widget _privacyPage(BuildContext context) {
     const items = [
-      ('发送前预览', '服务商、模型、问题、作答与原文片段先列出。'),
-      ('图片单次授权', '每张图片单独预览，只授权一次。'),
-      ('不自动重试', '超时或中断不会自动重发。'),
-      ('数据存储', '副本、索引与笔记保存在此设备；不设同步服务器。'),
+      ('发送前预览', '发送前展示服务商、模型、问题与原文片段。'),
+      ('图片单次授权', '每张图片单独预览并单次授权。'),
+      ('不自动重试', '超时或失败均不自动重发。'),
+      ('数据存储', '原件、索引与数据均留在本机，无同步服务器。'),
     ];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _sectionHeader(context, '隐私与数据', '学习数据留在本机，AI 请求只在确认后发出。'),
+        _sectionHeader(context, '隐私与数据', '数据全程本地，AI 请求须先确认。'),
         for (final item in items) _infoRow(context, item.$1, item.$2),
         _row(
           context,
@@ -894,6 +1407,53 @@ class _SettingsDialogState extends State<SettingsDialog> {
           control: OutlinedButton(
             onPressed: _copyDataDirectory,
             child: const Text('复制路径'),
+          ),
+        ),
+        _row(
+          context,
+          '整库备份',
+          description: '含原件、数据库与全部学习数据（不含 API Key），默认含回收站。',
+          control: Column(
+            children: [
+              OutlinedButton.icon(
+                onPressed: () => _backupLibrary(),
+                icon: const QIcon(QIcons.archive, size: IconSizes.sm),
+                label: const Text('选择位置并备份'),
+              ),
+              TextButton(
+                onPressed: () => _backupLibrary(includeTrash: false),
+                child: const Text('备份但不含回收站'),
+              ),
+            ],
+          ),
+        ),
+        _row(
+          context,
+          '整库恢复',
+          description: '校验后于下次启动时替换；原库移至 pre-restore，失败自动回滚。',
+          control: OutlinedButton.icon(
+            onPressed: _restoreLibrary,
+            icon: const QIcon(QIcons.restore, size: IconSizes.sm),
+            label: const Text('选择备份并准备恢复'),
+          ),
+        ),
+        _row(
+          context,
+          '存储与原件修复',
+          description: '查看占用、清理缓存或按哈希重新链接缺失原件。',
+          control: OutlinedButton.icon(
+            onPressed: _showStorage,
+            icon: const QIcon(QIcons.archive, size: IconSizes.sm),
+            label: const Text('查看占用与修复'),
+          ),
+        ),
+        _row(
+          context,
+          '上次恢复结果',
+          description: '查看应用状态、失败原因与原库位置。',
+          control: TextButton(
+            onPressed: _showLastRestore,
+            child: const Text('查看'),
           ),
         ),
       ],
@@ -915,7 +1475,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Quelyt 0.1.0',
+                    'Quelyt 0.2.0-dev',
                     style: context.texts.titleSmall!.copyWith(fontSize: 16),
                   ),
                   const SizedBox(height: 2),
@@ -944,7 +1504,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
             onPressed: () => showLicensePage(
               context: context,
               applicationName: 'Quelyt',
-              applicationVersion: '0.1.0',
+              applicationVersion: '0.2.0-dev',
               applicationIcon: const Padding(
                 padding: EdgeInsets.symmetric(vertical: 8),
                 child: QuelytMark(size: 40, tile: true),
@@ -1145,10 +1705,11 @@ class _NavItemState extends State<_NavItem> {
           ),
           child: Row(
             children: [
-              Icon(
+              QIcon(
                 widget.item.icon,
-                size: 18,
+                size: IconSizes.md,
                 color: widget.selected ? c.ink : c.inkMuted,
+                active: widget.selected,
               ),
               const SizedBox(width: 10),
               Expanded(

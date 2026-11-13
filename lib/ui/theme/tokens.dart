@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+export '../icons/q_icons.dart';
+
 /// Design tokens for Quelyt.
 ///
 /// The interface follows a white, paper-like neutral system in the spirit of

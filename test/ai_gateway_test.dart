@@ -115,6 +115,23 @@ void main() {
     learnerAnswer: learnerAnswer,
   );
 
+  test('connection test sends a minimal model request', () async {
+    await gateway.testConnection(settings);
+    expect(requests, hasLength(1));
+    final payload = jsonDecode(requests.single.body) as Map;
+    expect(payload['model'], 'text-model');
+    expect(payload['max_tokens'], 8);
+    expect((payload['messages'] as List).single['content'], 'Reply with OK.');
+
+    status = 401;
+    await expectLater(gateway.testConnection(settings), fails(AiError.unauthorized));
+  });
+
+  test('key normalization removes wrappers and invisible characters', () async {
+    await gateway.saveKey(settings, ' "Bearer sk-test\u200b\u00a0" ');
+    expect(await gateway.readKey(settings), 'sk-test');
+  });
+
   test(
     'prepare is entirely local and preserves review text and source identity',
     () {

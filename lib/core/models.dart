@@ -1,4 +1,39 @@
-enum DocumentKind { textbook, paper }
+/// The learner's chosen study mode, not a required classification.
+///
+/// Import never asks for this value: [unspecified] is a first-class state that
+/// opens the general reading-and-Q&A path. Textbook self-study and paper close
+/// reading are opt-in switches inside the reader. The name and stored values
+/// stay compatible with the v0.1 library, where only textbook and paper
+/// existed.
+enum DocumentKind { unspecified, textbook, paper }
+
+extension DocumentKindX on DocumentKind {
+  String get label => switch (this) {
+    DocumentKind.textbook => '教材自学',
+    DocumentKind.paper => '论文精读',
+    DocumentKind.unspecified => '阅读与问答',
+  };
+
+  bool get isSpecified => this != DocumentKind.unspecified;
+
+  /// Unknown or missing legacy values degrade to the general path instead of
+  /// silently becoming "paper", which the old binary branch implied.
+  static DocumentKind parse(Object? value) =>
+      DocumentKind.values.asNameMap()[value as String? ?? ''] ??
+      DocumentKind.unspecified;
+}
+
+/// Where a document is in its local lifecycle. Search, AI requests, plans and
+/// ordinary lists only read [active]; history may read the other states with an
+/// explicit explanation.
+enum DocumentLifecycle {
+  active,
+  trashed,
+  purging;
+
+  static DocumentLifecycle parse(Object? value) =>
+      DocumentLifecycle.values.asNameMap()[value as String? ?? ''] ?? active;
+}
 
 enum EvidenceOrigin { text, ocr, manual }
 
@@ -97,20 +132,53 @@ class DocumentRecord {
     required this.contentHash,
     this.pageCount = 1,
     this.currentPage = 1,
+    this.originalName = '',
+    this.format = '',
+    this.sizeBytes = 0,
+    this.lifecycle = DocumentLifecycle.active,
+    this.lifecycleVersion = 1,
+    this.starred = false,
+    this.deletedBatch,
+    this.trashedAt,
     DateTime? createdAt,
+    DateTime? addedAt,
     DateTime? lastOpenedAt,
-  }) : createdAt = createdAt ?? DateTime.now(),
+  }) : createdAt = createdAt ?? addedAt ?? DateTime.now(),
+       addedAt = addedAt ?? createdAt ?? DateTime.now(),
        lastOpenedAt = lastOpenedAt ?? createdAt ?? DateTime.now();
 
   final String id;
   final String title;
+
+  /// Legacy storage column, reinterpreted as the learning-mode preference.
   final DocumentKind kind;
   final String filePath;
   final String contentHash;
   final int pageCount;
   final int currentPage;
+
+  /// The name the user's file had on their own disk. Renaming the display title
+  /// never rewrites this and never touches the external file.
+  final String originalName;
+
+  /// File format without the leading dot, e.g. `pdf`, `png`.
+  final String format;
+  final int sizeBytes;
+  final DocumentLifecycle lifecycle;
+
+  /// Bumped on every lifecycle transition. Background work captures it and
+  /// refuses to write results produced for an older state.
+  final int lifecycleVersion;
+  final bool starred;
+  final String? deletedBatch;
+  final DateTime? trashedAt;
   final DateTime createdAt;
+  final DateTime addedAt;
   final DateTime lastOpenedAt;
+
+  bool get isActive => lifecycle == DocumentLifecycle.active;
+  bool get isTrashed => lifecycle == DocumentLifecycle.trashed;
+  bool get isPurging => lifecycle == DocumentLifecycle.purging;
 
   DocumentRecord copyWith({
     String? id,
@@ -120,7 +188,18 @@ class DocumentRecord {
     String? contentHash,
     int? pageCount,
     int? currentPage,
+    String? originalName,
+    String? format,
+    int? sizeBytes,
+    DocumentLifecycle? lifecycle,
+    int? lifecycleVersion,
+    bool? starred,
+    String? deletedBatch,
+    bool clearDeletedBatch = false,
+    DateTime? trashedAt,
+    bool clearTrashedAt = false,
     DateTime? createdAt,
+    DateTime? addedAt,
     DateTime? lastOpenedAt,
   }) => DocumentRecord(
     id: id ?? this.id,
@@ -130,7 +209,18 @@ class DocumentRecord {
     contentHash: contentHash ?? this.contentHash,
     pageCount: pageCount ?? this.pageCount,
     currentPage: currentPage ?? this.currentPage,
+    originalName: originalName ?? this.originalName,
+    format: format ?? this.format,
+    sizeBytes: sizeBytes ?? this.sizeBytes,
+    lifecycle: lifecycle ?? this.lifecycle,
+    lifecycleVersion: lifecycleVersion ?? this.lifecycleVersion,
+    starred: starred ?? this.starred,
+    deletedBatch: clearDeletedBatch
+        ? null
+        : deletedBatch ?? this.deletedBatch,
+    trashedAt: clearTrashedAt ? null : trashedAt ?? this.trashedAt,
     createdAt: createdAt ?? this.createdAt,
+    addedAt: addedAt ?? this.addedAt,
     lastOpenedAt: lastOpenedAt ?? this.lastOpenedAt,
   );
 
@@ -142,19 +232,39 @@ class DocumentRecord {
     'contentHash': contentHash,
     'pageCount': pageCount,
     'currentPage': currentPage,
+    'originalName': originalName,
+    'format': format,
+    'sizeBytes': sizeBytes,
+    'lifecycle': lifecycle.name,
+    'lifecycleVersion': lifecycleVersion,
+    'starred': starred,
+    'deletedBatch': deletedBatch,
+    'trashedAt': trashedAt?.toIso8601String(),
     'createdAt': createdAt.toIso8601String(),
+    'addedAt': addedAt.toIso8601String(),
     'lastOpenedAt': lastOpenedAt.toIso8601String(),
   };
 
   factory DocumentRecord.fromJson(Map<String, dynamic> json) => DocumentRecord(
     id: json['id'] as String,
     title: json['title'] as String,
-    kind: DocumentKind.values.byName(json['kind'] as String),
+    kind: DocumentKindX.parse(json['kind']),
     filePath: json['filePath'] as String,
     contentHash: json['contentHash'] as String,
     pageCount: json['pageCount'] as int,
     currentPage: json['currentPage'] as int,
+    originalName: json['originalName'] as String? ?? '',
+    format: json['format'] as String? ?? '',
+    sizeBytes: (json['sizeBytes'] as num?)?.toInt() ?? 0,
+    lifecycle: DocumentLifecycle.parse(json['lifecycle']),
+    lifecycleVersion: (json['lifecycleVersion'] as num?)?.toInt() ?? 1,
+    starred: json['starred'] as bool? ?? false,
+    deletedBatch: json['deletedBatch'] as String?,
+    trashedAt: json['trashedAt'] == null
+        ? null
+        : _date(json['trashedAt']),
     createdAt: _date(json['createdAt']),
+    addedAt: json['addedAt'] == null ? null : _date(json['addedAt']),
     lastOpenedAt: _date(json['lastOpenedAt']),
   );
 }

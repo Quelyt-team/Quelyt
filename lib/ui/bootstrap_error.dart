@@ -95,7 +95,7 @@ class BootstrapErrorApp extends StatelessWidget {
                         children: [
                           FilledButton.icon(
                             onPressed: () => SystemNavigator.pop(),
-                            icon: const Icon(Icons.close_rounded, size: 17),
+                            icon: const QIcon(QIcons.close, size: IconSizes.sm),
                             label: const Text('退出应用'),
                           ),
                           OutlinedButton.icon(
@@ -111,7 +111,7 @@ class BootstrapErrorApp extends StatelessWidget {
                                 );
                               }
                             },
-                            icon: const Icon(Icons.copy_rounded, size: 16),
+                            icon: const QIcon(QIcons.copy, size: IconSizes.sm),
                             label: const Text('复制错误信息'),
                           ),
                         ],

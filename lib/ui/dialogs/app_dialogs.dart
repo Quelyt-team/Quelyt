@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../app_controller.dart';
@@ -8,88 +8,6 @@ import '../theme/tokens.dart';
 import '../widgets/app_close_button.dart';
 import '../widgets/app_dialog.dart';
 import '../widgets/app_surfaces.dart';
-
-Future<DocumentKind?> showImportKindDialog(BuildContext context) {
-  return showAppDialog<DocumentKind>(
-    context: context,
-    builder: (context) => AppDialog(
-      title: '导入资料',
-      maxWidth: 420,
-      actions: const [],
-      content: const Column(
-        children: [
-          _ImportOption(
-            icon: Icons.menu_book_outlined,
-            title: '教材自学',
-            description: '按节阅读与练习',
-            kind: DocumentKind.textbook,
-          ),
-          _ImportOption(
-            icon: Icons.article_outlined,
-            title: '论文精读',
-            description: '按页阅读与摘录',
-            kind: DocumentKind.paper,
-          ),
-        ],
-      ),
-    ),
-  );
-}
-
-class _ImportOption extends StatelessWidget {
-  const _ImportOption({
-    required this.icon,
-    required this.title,
-    required this.description,
-    required this.kind,
-  });
-
-  final IconData icon;
-  final String title;
-  final String description;
-  final DocumentKind kind;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.colors;
-    return InkWell(
-      onTap: () => Navigator.pop(context, kind),
-      hoverColor: c.sidebar,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        decoration: BoxDecoration(
-          border: Border(bottom: BorderSide(color: c.outline)),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, size: 18, color: c.inkMuted),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: context.texts.bodyMedium!.copyWith(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    description,
-                    style: context.texts.bodySmall!.copyWith(fontSize: 11),
-                  ),
-                ],
-              ),
-            ),
-            Icon(Icons.chevron_right_rounded, size: 16, color: c.inkMuted),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 Future<int?> showJumpPageDialog(
   BuildContext context, {
@@ -195,7 +113,7 @@ class _CorrectTextDialogState extends State<_CorrectTextDialog> {
   Widget build(BuildContext context) => AppDialog(
     title: '校正文字',
     subtitle: '第 ${widget.page} 页。',
-    icon: Icons.edit_note_rounded,
+    icon: QIcons.notes,
     accent: context.colors.blueAccent,
     maxWidth: 720,
     actions: [
@@ -323,7 +241,7 @@ Future<bool> showDeleteDocumentDialog(
       return AppDialog(
         title: '删除资料？',
         subtitle: '「$title」',
-        icon: Icons.delete_outline_rounded,
+        icon: QIcons.delete,
         accent: AppAccent(color: c.danger, tint: c.dangerTint),
         maxWidth: 520,
         content: const DialogBodyText('将删除索引、笔记、问答与练习；外部原件不受影响。'),
@@ -399,7 +317,7 @@ class _SearchDialogState extends State<_SearchDialog> {
               padding: const EdgeInsets.fromLTRB(16, 10, 8, 6),
               child: Row(
                 children: [
-                  Icon(Icons.search_rounded, size: 20, color: c.inkMuted),
+                  QIcon(QIcons.search, size: IconSizes.md, color: c.inkMuted),
                   const SizedBox(width: 10),
                   Expanded(
                     child: TextField(
@@ -418,7 +336,7 @@ class _SearchDialogState extends State<_SearchDialog> {
                     ),
                   ),
                   const KeyHint('Esc'),
-                  AppCloseButton(size: 44, iconSize: 24),
+                  AppCloseButton(size: 44, iconSize: IconSizes.lg),
                 ],
               ),
             ),
@@ -440,7 +358,7 @@ class _SearchDialogState extends State<_SearchDialog> {
                   ? Center(
                       child: EmptyState(
                         compact: true,
-                        icon: Icons.manage_search_rounded,
+                        icon: QIcons.deepSearch,
                         title: '输入关键词',
                         message: '检索本篇文字。',
                       ),
@@ -449,7 +367,7 @@ class _SearchDialogState extends State<_SearchDialog> {
                   ? Center(
                       child: EmptyState(
                         compact: true,
-                        icon: Icons.search_off_rounded,
+                        icon: QIcons.searchEmpty,
                         title: '没有匹配结果',
                         message: '换个词试试。',
                       ),
@@ -539,7 +457,7 @@ class _SearchResultTileState extends State<_SearchResultTile> {
                   ),
                 ),
                 const SizedBox(width: Space.sm),
-                Icon(Icons.chevron_right_rounded, size: 18, color: c.inkMuted),
+                QIcon(QIcons.chevronRight, size: IconSizes.md, color: c.inkMuted),
               ],
             ),
           ),
@@ -762,7 +680,7 @@ class _RequestPreview extends StatelessWidget {
     return AppDialog(
       title: '发送预览',
       subtitle: '以下内容将发送。',
-      icon: Icons.outbound_outlined,
+      icon: QIcons.send,
       accent: c.violetAccent,
       maxWidth: 700,
       contentPadding: const EdgeInsets.fromLTRB(
@@ -778,7 +696,7 @@ class _RequestPreview extends StatelessWidget {
         ),
         FilledButton.icon(
           onPressed: () => Navigator.pop(context, 'send'),
-          icon: const Icon(Icons.send_outlined, size: 17),
+          icon: const QIcon(QIcons.send, size: IconSizes.sm),
           label: const Text('发送'),
         ),
       ],
@@ -822,7 +740,7 @@ class _RequestPreview extends StatelessWidget {
               title: '图片 · ${request.image!.scopeLabel}',
               trailing: TextButton.icon(
                 onPressed: () => Navigator.pop(context, 'scope'),
-                icon: const Icon(Icons.crop_rounded, size: 16),
+                icon: const QIcon(QIcons.region, size: IconSizes.sm),
                 label: Text(wholePage ? '切回框选区域' : '改为当前整页'),
               ),
               child: Column(
@@ -845,7 +763,7 @@ class _RequestPreview extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: Space.sm),
-                  TrustNote('图片仅用于这次请求。', icon: Icons.visibility_outlined),
+                  const TrustNote('图片仅用于这次请求。', icon: QIcons.visible),
                 ],
               ),
             ),
@@ -869,7 +787,7 @@ class _RequestPreview extends StatelessWidget {
             ),
             child: const TrustNote(
               '费用由服务商计入账户；不会自动重试。',
-              icon: Icons.receipt_long_outlined,
+              icon: QIcons.billing,
               emphasize: true,
             ),
           ),
@@ -899,7 +817,7 @@ class _DestinationBlock extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(Icons.cloud_outlined, size: 16, color: c.primary),
+              QIcon(QIcons.cloud, size: IconSizes.sm, color: c.primary),
               const SizedBox(width: 6),
               Text(
                 '将发送给',
@@ -1054,7 +972,7 @@ Future<void> showShortcutsDialog(BuildContext context) => showAppDialog<void>(
   context: context,
   builder: (context) => AppDialog(
     title: '键盘快捷键',
-    icon: Icons.keyboard_outlined,
+    icon: QIcons.keyboard,
     accent: context.colors.neutralAccent,
     maxWidth: 620,
     titleStyle: context.texts.bodyMedium!.copyWith(
