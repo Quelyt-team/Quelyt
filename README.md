@@ -1,15 +1,20 @@
-﻿<div align="center">
+﻿<a id="zh"></a>
+
+<div align="center">
 
 <img src="assets/brand/quelyt-icon.png" width="92" height="92" alt="Quelyt 应用图标">
 
 # Quelyt
 
-**本地优先、带原文出处的教材自学与论文精读客户端**
+**本地优先、带原文出处的教材自学与论文精读客户端**  
+*Local-first, source-grounded study client for textbooks & research papers*
 
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Android-2F6FEB?style=flat-square)
 ![Flutter](https://img.shields.io/badge/Flutter-3.47.9-02569B?style=flat-square&logo=flutter&logoColor=white)
 ![Version](https://img.shields.io/badge/Version-v0.3.0--dev-1F883D?style=flat-square)
 ![SQLite](https://img.shields.io/badge/SQLite%20Schema-v10-003B57?style=flat-square&logo=sqlite&logoColor=white)
+
+**中文** | [English](#en)
 
 [核心特点](#核心特点) · [功能概览](#功能概览) · [下载安装](#下载安装) · [验证状态](#验证状态与已知边界) · [本地构建](#本地构建与测试) · [仓库结构](#仓库结构)
 
@@ -117,3 +122,118 @@ Quelyt 面向需要围绕真实教材、学术论文与习题开展长期深度�
 - [OCR 实现与完整性](docs/OCR.md)
 - [首版验收基线](docs/首版验收.md)
 - [公开归档清单](docs/公开归档清单.md)
+
+---
+
+<a id="en"></a>
+
+<div align="center">
+
+## Quelyt (English)
+
+[中文](#zh) | **English**
+
+[Highlights](#highlights) · [Features](#features) · [Downloads](#downloads) · [Verification](#verification--known-scope) · [Build & Test](#build--test) · [Repository Layout](#repository-layout)
+
+</div>
+
+## Highlights
+
+Quelyt is built for long-term deep study with your own textbooks, research papers, and exercises. Document copies, OCR text, FTS5 search indexes, standalone notes, spaced-repetition schedules, and study calendars are all stored locally on your device:
+
+- **Offline by Default**: No account sign-in or mandatory API key required. Import materials, read original pages, run bundled OCR, search full text, edit Markdown notes, plan schedules, and complete self-graded reviews completely offline.
+- **Source-Grounded Traceability**: Note excerpts, whole-book QA citations, review candidates, and daily lessons bind to document SHA-256 hashes, physical page numbers, and region coordinates so you can always jump back to the original page.
+- **Controlled AI Boundaries**: Bring your own OpenAI Chat Completions-compatible text and vision keys, stored in OS-protected credential storage (never written into SQLite or full backups). Every AI request shows a full send preview beforehand, and image authorization applies to that single request only.
+
+## Features
+
+| Module | Capabilities |
+| --- | --- |
+| **Library & File Management** | Unified import queue (system picker & drag-and-drop), SHA-256 deduplication, nested colored folder tree, shortcuts, tags/stars, smart folders, floating overlay action menu, batch/single trash restore, original file export, `VACUUM INTO` full-library backup/restore, storage cleanup & missing-file relinking |
+| **Reader & Local OCR** | PDF / JPG / PNG page reader (zoom, rotate, region box selection, physical page jump, reading position restore), bundled Chinese/English Tesseract OCR, SQLite FTS5 search, and manual text correction |
+| **Book QA & Whole-Book Indexing** | Editable chapters, chunks, knowledge points & book overview indexing; multi-path whole-book retrieval; optional DeepSeek official Search / Fetch supplement (rate-limited with 7-day cache); cropped-region vision QA; separate book vs. web citations and isolated per-book sessions |
+| **Standalone Notes** | Global notes workspace decoupled from document lifecycles, 6 templates, 700 ms debounced autosave with revision guard, Markdown toolbar & preview, clickable source cards, shared folders & tags, full-text search, open questions tracker, revision history restore, trash & Markdown export |
+| **Review System** | Dual-mode FSRS v5 (default 19 weights) & topic drills; 5 dashboard views (Today, Mistakes, Checks, All, Stats); resumable review sessions, active recall, 4-grade undoable rating, optional AI grading suggestions with human verification (`review_checks`), and candidate triage |
+| **Schedule & AI Planning** | Monday-first monthly calendar, collapsible day panel, agenda list & learning-path views; manual study tasks, personal blocks, weekly repeats (up to 366 days), conflict pinpoint, deterministic local scheduler with undo; material catalog, knowledge extraction & daily lessons; Year/Month/Day picker, day stepping, `"Jump"` dialog (expression input or numeric offset / Y-M-D selector), and adaptive embedded AI planning dock |
+
+## Downloads
+
+Download the latest pre-release packages from the **Releases** sidebar on this repository:
+
+- **Windows x64 (Portable)**: Download `Quelyt-*-windows-x64.zip`, extract all files to a folder, and launch `local_study.exe` (keep the bundled DLLs, `data/`, and `ocr/` directories alongside the executable).
+  - When building from source, `scripts/install-windows.ps1` packages and installs to `%LOCALAPPDATA%\Programs\Quelyt` with automatic backups of previous binaries and local user data.
+- **Android arm64 (Development Build)**: Download `Quelyt-*-android-arm64-development.apk` (currently signed with a development key for testing).
+- **Checksums**: Verify downloads against the accompanying `SHA256SUMS.txt`.
+
+## Verification & Known Scope
+
+### Current Baseline (2026-11-13)
+- **Static Analysis**: `dart analyze lib test` exits `0` (0 errors, 0 warnings; 1 pre-existing deprecation `info` in `test/notes/notes_migration_test.dart`).
+- **Automated Tests**: `flutter test` passes **337 tests with 0 failures**; 1 billable live network test (`test/book_qa/live_book_qa_test.dart`) is skipped by default unless `BOOK_QA_LIVE=1` and `DEEPSEEK_API_KEY` are set.
+- **Target Builds**: Built and locally verified `0.3.0-dev+33` Windows x64 Release, and built Android arm64 Release APK.
+
+### Pending / Out of Current Scope
+- Long-horizon evaluation of real model providers and end-to-end live DeepSeek Search / Fetch runs;
+- On-device Android full walkthrough & system drag-and-drop verification;
+- Rich-text WYSIWYG with embedded images, visual formula editor, note backlinks, OS notifications, ICS calendar sync, and 10,000-document scale stress testing.
+
+## Build & Test
+
+### Prerequisites
+- Flutter **`3.47.9`** / Dart **`3.13.7`** (scripts prefer workspace `.tooling/flutter`, falling back to `flutter` on PATH)
+- **Windows**: Visual Studio 2022 Desktop C++ toolchain, ATL, and Windows SDK
+- **Android**: JDK 17 and Android SDK
+
+### Commands
+
+```powershell
+# Run static checks and all offline tests
+./scripts/check.ps1
+
+# Build Windows Release bundle (output: build/windows/x64/runner/Release/)
+./scripts/check.ps1 -Task windows
+
+# Package ZIP and install to %LOCALAPPDATA%\Programs\Quelyt (with automatic backups)
+./scripts/install-windows.ps1
+
+# Build Android arm64 APK (output: build/app/outputs/flutter-apk/app-release.apk)
+./scripts/check.ps1 -Task android
+
+# Run Windows native OCR smoke test
+./native_ocr/windows/smoke-test.ps1
+```
+
+> If PowerShell blocks script execution, pass `-ExecutionPolicy Bypass`:
+> `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check.ps1 -Task windows`
+>
+> When the checkout path contains non-ASCII characters, `scripts/check.ps1` automatically creates a temporary ASCII directory junction to keep native toolchains happy.
+
+## Repository Layout
+
+To preserve compatibility with existing user libraries and credential bindings, internal package identifiers and app data folders retain `local_study/`; SQLite migrates sequentially from `v1 → v10` with automatic `VACUUM INTO` backups and integrity checks before each step. Third-party and OCR licenses live in [licenses/](licenses/) and [assets/ocr/LICENSE](assets/ocr/LICENSE).
+
+| Path | Description |
+| --- | --- |
+| `lib/core/` | Core data models, SQLite persistence, `v1 → v10` migrations, and FTS5 indexing |
+| `lib/features/library/` | Import queue, folder tree, shortcuts, tags, trash, export, backup & repair |
+| `lib/features/notes/` | Standalone notes, debounced autosave controller, source cards, Markdown preview & revisions |
+| `lib/features/book_qa/` | Whole-book understanding, multi-path retriever, web supplement & per-book QA dock |
+| `lib/features/review/` | FSRS v5 & topic drills, review sessions, AI checks & mistake analytics |
+| `lib/features/schedule/` | Calendar, deterministic scheduler, materials, knowledge items, lessons & date jump UI |
+| `lib/services/` | File I/O, PDF/image rendering, native OCR bridges, shared AI transport & Search/Fetch clients |
+| `lib/ui/` | App shell, reader & study panels, settings dialog, and Folio Line icon set (`QIcons`) |
+| `native_ocr/`, `assets/`, `licenses/` | Native Windows/Android OCR bridges, bundled models/brand assets & third-party licenses |
+| `scripts/`, `.github/` | Build/install scripts, GitHub Actions CI workflow, and Issue/PR templates |
+| `test/` | Persistence, migration, retrieval, AI contract, icon geometry & UI regression tests |
+
+## Related Documentation (Chinese)
+
+- [Changelog](CHANGELOG.md)
+- [Product & Design Plan](企划.md)
+- [Library Implementation Notes](docs/资料库实现说明.md)
+- [Notes Implementation Notes](docs/笔记实现说明.md)
+- [Book QA Implementation Notes](docs/教材问答实现说明.md)
+- [Schedule Implementation Notes](docs/日程实现说明.md)
+- [OCR Implementation & Integrity](docs/OCR.md)
+- [v0.1.0 Baseline Acceptance](docs/首版验收.md)
+- [Public Archive Manifest](docs/公开归档清单.md)
