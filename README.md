@@ -124,5 +124,4 @@ cd Quelyt
 - [日程实现说明](docs/日程实现说明.md)
 - [OCR 实现与完整性](docs/OCR.md)
 - [首版验收基线](docs/首版验收.md)
-- [DeepTutor 对齐计划](docs/功能校验与DeepTutor对齐计划.md)
 - [公开归档清单](docs/公开归档清单.md)

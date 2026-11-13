@@ -32,9 +32,13 @@ windows/flutter/ephemeral/
 docs/*
 !docs/OCR.md
 !docs/首版验收.md
-!docs/功能校验与DeepTutor对齐计划.md
 !docs/公开归档清单.md
 !docs/日程实现说明.md
 !docs/教材问答实现说明.md
 !docs/资料库实现说明.md
 !docs/笔记实现说明.md
+
+# Keep internal alignment & implementation plan drafts local.
+/*实施计划.md
+/*对齐方案.md
+/*调整方案.md

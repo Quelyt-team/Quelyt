@@ -1,0 +1,32 @@
+name: 功能建议 (Feature Request)
+description: 提出新功能想法或交互优化建议
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: 相关模块
+      options:
+        - 资料库与导入
+        - 阅读器与 OCR
+        - 教材问答与联网搜索
+        - 独立笔记
+        - 复习系统
+        - 日程与 AI 排课
+        - 界面与动效
+        - 其他
+  - type: textarea
+    id: scenario
+    attributes:
+      label: 使用场景与痛点
+      placeholder: 描述你在什么学习场景下遇到不便
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 期望方案
+      placeholder: 希望 Quelyt 提供怎样的交互或能力
+    validations:
+      required: true
