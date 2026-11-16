@@ -82,7 +82,7 @@ void main() {
         jsonEncode(note.toJson()),
       ],
     );
-    db.dispose();
+    db.close();
 
     final store = LocalStore.open(temp.path);
     addTearDown(store.dispose);

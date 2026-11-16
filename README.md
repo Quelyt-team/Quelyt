@@ -52,7 +52,7 @@ Quelyt 面向需要围绕真实教材、学术论文与习题开展长期深度�
 ## 验证状态与已知边界
 
 ### 已验证基线（2026-11-16）
-- **静态分析**：`dart analyze lib test` 退出码 `0`（0 错误、0 警告，仅 1 条既有的 `test/notes/notes_migration_test.dart` `dispose` 弃用提示 `info`）。
+- **静态分析**：`flutter analyze` / `dart analyze --fatal-infos lib test` 退出码 `0`（0 错误、0 警告、0 提示）。
 - **自动化测试**：`flutter test --no-pub` **346 项通过、0 项失败**；另有 1 项依赖外部真实密钥的联网测试默认跳过（`test/book_qa/live_book_qa_test.dart`，需显式设置 `BOOK_QA_LIVE=1` 与 `DEEPSEEK_API_KEY`）。
 - **Android 构建与校验**：已完成 `0.3.0-dev+34` ARM64 Release APK 构建，`lib/` 仅含 `arm64-v8a`（9 个 `.so`）且通过 `zipalign -c -v -P 16 4` 16 KB 页对齐校验；Windows 便携基线包为 `0.3.0-dev+33`。
 
@@ -154,7 +154,7 @@ Download the latest pre-release packages from the **Releases** sidebar on this r
 ## Verification & Known Scope
 
 ### Current Baseline (2026-11-16)
-- **Static Analysis**: `dart analyze lib test` exits `0` (0 errors, 0 warnings; 1 pre-existing deprecation `info` in `test/notes/notes_migration_test.dart`).
+- **Static Analysis**: `flutter analyze` / `dart analyze --fatal-infos lib test` exits `0` (0 errors, 0 warnings, 0 info lints).
 - **Automated Tests**: `flutter test --no-pub` passes **346 tests with 0 failures**; 1 billable live network test (`test/book_qa/live_book_qa_test.dart`) is skipped by default unless `BOOK_QA_LIVE=1` and `DEEPSEEK_API_KEY` are set.
 - **Android Build & Inspection**: Built `0.3.0-dev+34` ARM64 Release APK; verified `lib/` contains only `arm64-v8a` (9 `.so` libraries) and passes 16 KB page-alignment check via `zipalign -c -v -P 16 4`. Windows portable baseline remains `0.3.0-dev+33`.
 
