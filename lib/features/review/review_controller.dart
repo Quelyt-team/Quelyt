@@ -265,9 +265,16 @@ class ReviewController extends ChangeNotifier {
     return _activeSession!;
   }
 
+  @visibleForTesting
+  int get activeAccumulatedSeconds => _accumulatedActiveSeconds;
+
   void beginActiveItemTimer() {
     _accumulatedActiveSeconds = 0;
     _currentActiveSecondsStartedAtMs = DateTime.now().millisecondsSinceEpoch;
+  }
+
+  void resumeActiveItemTimer() {
+    _currentActiveSecondsStartedAtMs ??= DateTime.now().millisecondsSinceEpoch;
   }
 
   void pauseActiveItemTimer() {

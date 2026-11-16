@@ -242,7 +242,11 @@ class _NotesPageState extends State<NotesPage> with WidgetsBindingObserver {
                       context,
                       QIcons.back,
                       '返回列表',
-                      notes.closeSelected,
+                      () {
+                        notes.flushNow();
+                        notes.closeSelected();
+                      },
+                      minExtent: 48,
                     ),
                   Expanded(
                     child: TextField(
@@ -1124,14 +1128,21 @@ class _NotesPageState extends State<NotesPage> with WidgetsBindingObserver {
     String tooltip,
     VoidCallback action, {
     Color? color,
-  }) => IconButton(
-    tooltip: tooltip,
-    onPressed: action,
-    icon: QIcon(icon, size: IconSizes.sm, color: color),
-    visualDensity: VisualDensity.compact,
-    constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-    padding: EdgeInsets.zero,
-  );
+    double? minExtent,
+  }) {
+    final extent = minExtent ??
+        (MediaQuery.sizeOf(context).width < 840 ? 44.0 : 28.0);
+    return IconButton(
+      tooltip: tooltip,
+      onPressed: action,
+      icon: QIcon(icon, size: IconSizes.sm, color: color),
+      visualDensity: extent >= 44
+          ? VisualDensity.standard
+          : VisualDensity.compact,
+      constraints: BoxConstraints(minWidth: extent, minHeight: extent),
+      padding: EdgeInsets.zero,
+    );
+  }
 
   String _dateTime(DateTime value) =>
       '${value.year}-${value.month.toString().padLeft(2, '0')}-'

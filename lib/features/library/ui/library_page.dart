@@ -1,11 +1,16 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import '../../../app_controller.dart';
 import '../../../core/models.dart';
+import '../../../services/file_reveal.dart';
+import '../../../services/platform_file_access.dart';
 import '../../../ui/shell/app_shell.dart';
 import '../../../ui/theme/tokens.dart';
 import '../../../ui/widgets/app_surfaces.dart';
@@ -1059,33 +1064,30 @@ class _LibraryPageState extends State<LibraryPage> {
       }
     }
 
-    return MediaQuery.withClampedTextScaling(
-      maxScaleFactor: 1.35,
-      child: UnifiedHeader(
-        title: '书库',
-        subtitle: '',
-        sidebarCollapsed: widget.sidebarCollapsed,
-        onToggleSidebar: widget.onToggleSidebar ?? () {},
-        onOpenSettings: widget.onOpenSettings,
-        showSidebarToggle: widget.showSidebarToggle,
-        showSubtitle: false,
-        showWindowChrome: widget.showWindowChrome,
-        compact: isPhoneShell,
-        leading: isPhoneShell
-            ? Builder(
-                builder: (context) => _headerIconButton(
-                  tooltip: '文件夹',
-                  onPressed: () => Scaffold.of(context).openDrawer(),
-                  icon: const QIcon(QIcons.folderOpen, size: IconSizes.md),
-                ),
-              )
-            : null,
-        titleContent: _headerBreadcrumb(
-          isPhoneShell: isPhoneShell,
-          showCount: !isPhoneShell && innerWidth >= 540,
-        ),
-        trailing: trailing,
+    return UnifiedHeader(
+      title: '书库',
+      subtitle: '',
+      sidebarCollapsed: widget.sidebarCollapsed,
+      onToggleSidebar: widget.onToggleSidebar ?? () {},
+      onOpenSettings: widget.onOpenSettings,
+      showSidebarToggle: widget.showSidebarToggle,
+      showSubtitle: false,
+      showWindowChrome: widget.showWindowChrome,
+      compact: isPhoneShell,
+      leading: isPhoneShell
+          ? Builder(
+              builder: (context) => _headerIconButton(
+                tooltip: '文件夹',
+                onPressed: () => Scaffold.of(context).openDrawer(),
+                icon: const QIcon(QIcons.folderOpen, size: IconSizes.md),
+              ),
+            )
+          : null,
+      titleContent: _headerBreadcrumb(
+        isPhoneShell: isPhoneShell,
+        showCount: !isPhoneShell && innerWidth >= 540,
       ),
+      trailing: trailing,
     );
   }
 
@@ -1094,11 +1096,13 @@ class _LibraryPageState extends State<LibraryPage> {
     required VoidCallback? onPressed,
     required Widget icon,
   }) {
+    final compactTarget = MediaQuery.sizeOf(context).width < 840;
+    final extent = compactTarget ? 44.0 : 30.0;
     return IconButton(
       tooltip: tooltip,
       onPressed: onPressed,
       visualDensity: VisualDensity.compact,
-      constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
+      constraints: BoxConstraints(minWidth: extent, minHeight: extent),
       padding: EdgeInsets.zero,
       icon: icon,
     );
@@ -2064,6 +2068,36 @@ class _LibraryPageState extends State<LibraryPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('先选择要导出的资料或文件夹。')),
       );
+      return;
+    }
+    if (!FileReveal.canOpenFolder &&
+        PlatformFileAccess.instance.capabilities.safSaveAs) {
+      final stamp = DateTime.now()
+          .toUtc()
+          .toIso8601String()
+          .replaceAll(':', '')
+          .replaceAll('.', '')
+          .replaceAll('-', '');
+      final tempRoot = Directory(
+        p.join((await getTemporaryDirectory()).path, 'quelyt_exports', stamp),
+      );
+      await tempRoot.create(recursive: true);
+      final report = await c.exportSelection(tempRoot.path);
+      if (report == null || !mounted) return;
+      var effectiveReport = report;
+      if (report.exported > 1 || c.selectedFolders.isNotEmpty) {
+        final zipPath = p.join(
+          tempRoot.parent.path,
+          'Quelyt-export-$stamp.zip',
+        );
+        await c.exportService.packDirectoryToZip(tempRoot.path, zipPath);
+        effectiveReport = report.copyWith(
+          primaryFilePath: zipPath,
+          isArchive: true,
+        );
+      }
+      if (!mounted) return;
+      await showExportReportDialog(context, effectiveReport);
       return;
     }
     final destination = await pickExportDirectory(context);

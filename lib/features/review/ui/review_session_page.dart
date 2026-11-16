@@ -31,7 +31,8 @@ class ReviewSessionPage extends StatefulWidget {
   State<ReviewSessionPage> createState() => _ReviewSessionPageState();
 }
 
-class _ReviewSessionPageState extends State<ReviewSessionPage> {
+class _ReviewSessionPageState extends State<ReviewSessionPage>
+    with WidgetsBindingObserver {
   final _answerController = TextEditingController();
   final _answerFocus = FocusNode();
   final _correctionNoteController = TextEditingController();
@@ -55,14 +56,49 @@ class _ReviewSessionPageState extends State<ReviewSessionPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     rc.addListener(_onControllerChanged);
     rc.beginActiveItemTimer();
     _syncCurrentItemState();
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+        _flushActiveDraft();
+        rc.pauseActiveItemTimer();
+      case AppLifecycleState.resumed:
+        if (rc.activeSession != null) {
+          rc.resumeActiveItemTimer();
+        }
+      case AppLifecycleState.detached:
+        _flushActiveDraft();
+        rc.pauseCurrentSession();
+    }
+  }
+
+  void _flushActiveDraft() {
+    final session = rc.activeSession;
+    if (session == null || session.currentIndex >= session.items.length) {
+      return;
+    }
+    rc.saveCurrentDraft(
+      position: session.currentIndex,
+      draftAnswer: _answerController.text,
+      usedHint: _usedHint,
+      viewedSource: _viewedSource,
+    );
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     rc.removeListener(_onControllerChanged);
+    _flushActiveDraft();
+    rc.pauseActiveItemTimer();
     _answerController.dispose();
     _answerFocus.dispose();
     _correctionNoteController.dispose();
@@ -342,37 +378,45 @@ class _ReviewSessionPageState extends State<ReviewSessionPage> {
         !_correctionFocus.hasFocus &&
         item.scheduleMode == ReviewScheduleMode.fsrs;
 
-    return Focus(
-      autofocus: false,
-      onKeyEvent: (node, event) {
-        if (!shortcutsEnabled || event is! KeyDownEvent) {
-          return KeyEventResult.ignored;
+    return PopScope(
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) {
+          _flushActiveDraft();
+          rc.pauseCurrentSession();
         }
-        final key = event.logicalKey;
-        ReviewRating? chosen;
-        if (key == LogicalKeyboardKey.digit1) chosen = ReviewRating.again;
-        if (key == LogicalKeyboardKey.digit2) chosen = ReviewRating.hard;
-        if (key == LogicalKeyboardKey.digit3) chosen = ReviewRating.good;
-        if (key == LogicalKeyboardKey.digit4) chosen = ReviewRating.easy;
-        if (chosen != null) {
-          _submitRating(item, session.currentIndex, rating: chosen);
-          return KeyEventResult.handled;
-        }
-        return KeyEventResult.ignored;
       },
-      child: Scaffold(
-        backgroundColor: c.canvas,
-        body: SafeArea(
-          child: Column(
-            children: [
-              _SessionHeader(
-                session: session,
-                item: item,
-                canUndo: rc.canUndoLastGrade,
-                onBack: () {
-                  rc.pauseCurrentSession();
-                  Navigator.of(context).maybePop();
-                },
+      child: Focus(
+        autofocus: false,
+        onKeyEvent: (node, event) {
+          if (!shortcutsEnabled || event is! KeyDownEvent) {
+            return KeyEventResult.ignored;
+          }
+          final key = event.logicalKey;
+          ReviewRating? chosen;
+          if (key == LogicalKeyboardKey.digit1) chosen = ReviewRating.again;
+          if (key == LogicalKeyboardKey.digit2) chosen = ReviewRating.hard;
+          if (key == LogicalKeyboardKey.digit3) chosen = ReviewRating.good;
+          if (key == LogicalKeyboardKey.digit4) chosen = ReviewRating.easy;
+          if (chosen != null) {
+            _submitRating(item, session.currentIndex, rating: chosen);
+            return KeyEventResult.handled;
+          }
+          return KeyEventResult.ignored;
+        },
+        child: Scaffold(
+          backgroundColor: c.canvas,
+          body: SafeArea(
+            child: Column(
+              children: [
+                _SessionHeader(
+                  session: session,
+                  item: item,
+                  canUndo: rc.canUndoLastGrade,
+                  onBack: () {
+                    _flushActiveDraft();
+                    rc.pauseCurrentSession();
+                    Navigator.of(context).maybePop();
+                  },
                 onUndo: rc.undoLastGrade,
                 onDefer: () {
                   rc.deferItemOneDay(item.id);
@@ -647,12 +691,13 @@ class _ReviewSessionPageState extends State<ReviewSessionPage> {
                     ),
                   ),
                 ),
-                ),
+              ),
               ),
             ],
           ),
         ),
       ),
+    ),
     );
   }
 }
@@ -935,12 +980,22 @@ class _RevealPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
+          Wrap(
+            spacing: Space.sm,
+            runSpacing: Space.xs,
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              QIcon(QIcons.verify, size: IconSizes.md, color: c.green),
-              const SizedBox(width: 8),
-              Text('参考答案与核对', style: context.texts.titleSmall),
-              const Spacer(),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  QIcon(QIcons.verify, size: IconSizes.md, color: c.green),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text('参考答案与核对', style: context.texts.titleSmall),
+                  ),
+                ],
+              ),
               TextButton.icon(
                 onPressed: aiLoading ? null : onAskAi,
                 icon: const QIcon(QIcons.ai, size: IconSizes.sm),
@@ -1004,23 +1059,26 @@ class _RevealPanel extends StatelessWidget {
                 borderRadius: BorderRadius.circular(Radii.sm),
                 border: Border.all(color: c.outline),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      AppBadge(
-                        label: 'AI 建议：${aiSuggestion!.suggestedOutcome.label}',
-                        tone: BadgeTone.violet,
-                        dense: true,
-                      ),
-                      const Spacer(),
-                      TextButton(
-                        onPressed: onDisputeAi,
-                        child: Text(aiDisputed ? '已标记评语待核对' : '评语有误 / 标记核对'),
-                      ),
-                    ],
-                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Wrap(
+                      spacing: Space.sm,
+                      runSpacing: Space.xs,
+                      alignment: WrapAlignment.spaceBetween,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        AppBadge(
+                          label: 'AI 建议：${aiSuggestion!.suggestedOutcome.label}',
+                          tone: BadgeTone.violet,
+                          dense: true,
+                        ),
+                        TextButton(
+                          onPressed: onDisputeAi,
+                          child: Text(aiDisputed ? '已标记评语待核对' : '评语有误 / 标记核对'),
+                        ),
+                      ],
+                    ),
                   const SizedBox(height: 6),
                   SelectableText(aiSuggestion!.rationale),
                   if (aiSuggestion!.missingPoints.isNotEmpty) ...[
@@ -1125,10 +1183,13 @@ class _GradingBar extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          Wrap(
+            spacing: Space.sm,
+            runSpacing: Space.xs,
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               Text('记忆提取评分（FSRS v5）', style: context.texts.labelLarge),
-              const Spacer(),
               Text(
                 '快捷键 1 / 2 / 3 / 4',
                 style: context.texts.bodySmall!.copyWith(color: c.inkMuted),
@@ -1139,20 +1200,35 @@ class _GradingBar extends StatelessWidget {
           LayoutBuilder(
             builder: (context, constraints) {
               final narrow = constraints.maxWidth < 520;
-              return GridView.count(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                crossAxisCount: narrow ? 2 : 4,
-                mainAxisSpacing: 8,
-                crossAxisSpacing: 8,
-                childAspectRatio: narrow ? 2.6 : 2.1,
+              final columns = narrow ? 2 : 4;
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  for (var i = 0; i < previews.length; i++)
-                    _FsrsButton(
-                      shortcutIndex: i + 1,
-                      preview: previews[i],
-                      onTap: () => onRateFsrs(previews[i].rating),
+                  for (var start = 0; start < previews.length; start += columns) ...[
+                    if (start > 0) const SizedBox(height: 8),
+                    IntrinsicHeight(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          for (var col = 0; col < columns; col++) ...[
+                            if (col > 0) const SizedBox(width: 8),
+                            if (start + col < previews.length)
+                              Expanded(
+                                child: _FsrsButton(
+                                  shortcutIndex: start + col + 1,
+                                  preview: previews[start + col],
+                                  onTap: () => onRateFsrs(
+                                    previews[start + col].rating,
+                                  ),
+                                ),
+                              )
+                            else
+                              const Expanded(child: SizedBox.shrink()),
+                          ],
+                        ],
+                      ),
                     ),
+                  ],
                 ],
               );
             },
@@ -1196,6 +1272,7 @@ class _FsrsButton extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(Radii.sm),
         child: Container(
+          constraints: const BoxConstraints(minHeight: 54),
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(Radii.sm),

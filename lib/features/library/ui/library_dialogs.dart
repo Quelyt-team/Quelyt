@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 
 import '../../../core/models.dart';
 import '../../../services/file_reveal.dart';
+import '../../../services/platform_file_access.dart';
 import '../../../ui/theme/tokens.dart';
 import '../../../ui/widgets/app_dialog.dart';
 import '../../../ui/widgets/app_surfaces.dart';
@@ -1057,6 +1059,18 @@ Future<void> showExportReportDialog(
   context: context,
   builder: (context) {
     final colors = context.colors;
+    final targetPath = report.primaryFilePath;
+    Future<void> handleAction(
+      Future<PlatformFileActionResult> Function() action,
+    ) async {
+      final res = await action();
+      if (!res.ok && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(res.error ?? '操作未完成。')),
+        );
+      }
+    }
+
     return AppDialog(
       title: report.ok ? '导出完成' : '导出未全部完成',
       subtitle: report.summary,
@@ -1066,10 +1080,44 @@ Future<void> showExportReportDialog(
           : AppAccent(color: colors.danger, tint: colors.dangerTint),
       maxWidth: 560,
       actions: [
-        if (report.destination != null)
+        if (FileReveal.canOpenFolder && report.destination != null)
           TextButton(
             onPressed: () => FileReveal.open(report.destination!),
             child: const Text('打开位置'),
+          ),
+        if (!FileReveal.canOpenFolder &&
+            targetPath != null &&
+            PlatformFileAccess.instance.capabilities.safSaveAs)
+          TextButton(
+            onPressed: () async {
+              final saved = await PlatformFileAccess.instance
+                  .saveFileToUserLocation(
+                    sourcePath: targetPath,
+                    fileName: p.basename(targetPath),
+                  );
+              if (!context.mounted || saved.cancelled) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    saved.saved
+                        ? '已保存到「${saved.displayName ?? p.basename(targetPath)}」。'
+                        : (saved.error ?? '保存未完成。'),
+                  ),
+                ),
+              );
+            },
+            child: const Text('保存到设备'),
+          ),
+        if (FileReveal.canShare && targetPath != null)
+          TextButton(
+            onPressed: () => handleAction(() => FileReveal.share(targetPath)),
+            child: const Text('分享'),
+          ),
+        if (FileReveal.canOpenExternal && targetPath != null && !report.isArchive)
+          TextButton(
+            onPressed: () =>
+                handleAction(() => FileReveal.openExternal(targetPath)),
+            child: const Text('用其他应用打开'),
           ),
         FilledButton(
           onPressed: () => Navigator.pop(context),

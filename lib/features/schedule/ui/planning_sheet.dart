@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -25,7 +27,8 @@ Future<void> showPlanningSheet(
       final media = MediaQuery.of(context);
       final keyboard = media.viewInsets.bottom;
       final available = media.size.height - keyboard;
-      final height = (available * .62).clamp(320.0, 520.0);
+      final maxHeight = math.max(180.0, available - 24);
+      final height = math.min(maxHeight, (available * .72).clamp(240.0, 520.0));
       return AnimatedPadding(
         duration: const Duration(milliseconds: 160),
         curve: Curves.easeOutCubic,
@@ -45,7 +48,11 @@ Future<void> showPlanningSheet(
         ),
       );
     },
-  );
+  ).whenComplete(() {
+    if (controller.planningOpen) {
+      controller.closePlanningPanel();
+    }
+  });
 }
 
 class PlanningSheet extends StatefulWidget {

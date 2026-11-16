@@ -1,8 +1,10 @@
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
 
 import '../../app_controller.dart';
 import '../../core/models.dart';
@@ -11,6 +13,7 @@ import '../../features/library/services/library_storage_service.dart';
 import '../../services/ai_gateway.dart';
 import '../../services/file_reveal.dart';
 import '../../services/ocr_service.dart';
+import '../../services/platform_file_access.dart';
 import '../dialogs/app_dialogs.dart';
 import '../theme/appearance.dart';
 import '../theme/tokens.dart';
@@ -288,17 +291,69 @@ class _SettingsDialogState extends State<SettingsDialog> {
     setState(() => _notice = '数据位置已复制。');
   }
 
-  Future<void> _backupLibrary({bool includeTrash = true}) async {
+  static String _backupZipFileName() {
+    final now = DateTime.now();
+    String two(int value) => value.toString().padLeft(2, '0');
+    final stamp =
+        '${now.year}${two(now.month)}${two(now.day)}-${two(now.hour)}${two(now.minute)}';
+    return 'quelyt-backup-$stamp${LibraryBackupService.zipExtension}';
+  }
+
+  static bool _isLoopbackAddress(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return false;
+    final normalized = trimmed.contains('://') ? trimmed : 'https://$trimmed';
+    final uri = Uri.tryParse(normalized);
+    if (uri == null) return false;
+    final host = uri.host.toLowerCase();
+    return host == 'localhost' || host == '127.0.0.1' || host == '::1';
+  }
+
+  Future<void> _backupLibrary({
+    bool includeTrash = true,
+    bool? asZip,
+  }) async {
+    Directory? tempDir;
     try {
-      final destination = await FilePicker.platform.getDirectoryPath(
-        dialogTitle: '选择整库备份位置',
-      );
-      if (destination == null || !mounted) return;
-      setState(() => _notice = '正在备份整库…');
-      final report = await LibraryBackupService(
+      final useZip = asZip ?? !FileReveal.canOpenFolder;
+      final service = LibraryBackupService(
         store: c.store,
         documents: c.documents,
-      ).create(destination, includeTrash: includeTrash);
+      );
+      BackupReport report;
+      if (useZip) {
+        final suggestedName = _backupZipFileName();
+        String outputZipPath;
+        if (FileReveal.canOpenFolder) {
+          final picked = await FilePicker.platform.saveFile(
+            dialogTitle: '保存整库备份压缩包',
+            fileName: suggestedName,
+            type: FileType.custom,
+            allowedExtensions: const ['zip'],
+          );
+          if (picked == null || !mounted) return;
+          outputZipPath = picked.toLowerCase().endsWith('.zip')
+              ? picked
+              : '$picked.zip';
+        } else {
+          tempDir = await Directory.systemTemp.createTemp('quelyt_backup_zip_');
+          outputZipPath = p.join(tempDir.path, suggestedName);
+        }
+        if (!mounted) return;
+        setState(() => _notice = '正在打包整库备份…');
+        report = await service.createZip(
+          p.dirname(outputZipPath),
+          fileName: p.basename(outputZipPath),
+          includeTrash: includeTrash,
+        );
+      } else {
+        final destination = await FilePicker.platform.getDirectoryPath(
+          dialogTitle: '选择整库备份位置',
+        );
+        if (destination == null || !mounted) return;
+        setState(() => _notice = '正在备份整库…');
+        report = await service.create(destination, includeTrash: includeTrash);
+      }
       if (!mounted) return;
       setState(() => _notice = report.summary);
       await showAppDialog<void>(
@@ -309,10 +364,41 @@ class _SettingsDialogState extends State<SettingsDialog> {
           icon: QIcons.archive,
           maxWidth: 560,
           actions: [
-            TextButton(
-              onPressed: () => FileReveal.open(report.path),
-              child: const Text('打开位置'),
-            ),
+            if (PlatformFileAccess.instance.capabilities.safSaveAs &&
+                report.isZip)
+              TextButton(
+                onPressed: () async {
+                  final saved = await PlatformFileAccess.instance
+                      .saveFileToUserLocation(
+                        sourcePath: report.path,
+                        fileName: p.basename(report.path),
+                        mimeType: 'application/zip',
+                      );
+                  if (!mounted || saved.cancelled) return;
+                  if (saved.saved) {
+                    setState(
+                      () => _notice =
+                          '已保存到设备：${saved.displayName ?? p.basename(report.path)}',
+                    );
+                  } else if (saved.error != null) {
+                    setState(() => _notice = saved.error);
+                  }
+                },
+                child: const Text('保存到设备'),
+              ),
+            if (FileReveal.canShare && report.isZip)
+              TextButton(
+                onPressed: () => FileReveal.share(
+                  report.path,
+                  mimeType: 'application/zip',
+                ),
+                child: const Text('分享'),
+              ),
+            if (FileReveal.canOpenFolder)
+              TextButton(
+                onPressed: () => FileReveal.open(report.path),
+                child: const Text('打开位置'),
+              ),
             FilledButton(
               onPressed: () => Navigator.pop(context),
               child: const Text('完成'),
@@ -327,7 +413,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
               ),
               const SizedBox(height: Space.md),
               Text(
-                '含原件与全部学习数据（不含 API Key）；'
+                '含原件、复习图片与全部学习数据（不含 API Key）；'
                 '${report.includeTrash ? '含回收站' : '不含回收站'}。',
                 style: context.texts.bodySmall!.copyWith(height: 1.6),
               ),
@@ -352,6 +438,12 @@ class _SettingsDialogState extends State<SettingsDialog> {
     } catch (error) {
       if (!mounted) return;
       setState(() => _notice = '备份失败：$error');
+    } finally {
+      if (tempDir != null && await tempDir.exists()) {
+        try {
+          await tempDir.delete(recursive: true);
+        } catch (_) {}
+      }
     }
   }
 
@@ -571,11 +663,40 @@ class _SettingsDialogState extends State<SettingsDialog> {
       ],
     ),
   );
-  Future<void> _restoreLibrary() async {
+  Future<void> _restoreLibrary({bool? fromZip}) async {
+    Directory? stagedZipDir;
     try {
-      final package = await FilePicker.platform.getDirectoryPath(
-        dialogTitle: '选择 Quelyt 备份文件夹',
-      );
+      final pickZip = fromZip ?? Platform.isAndroid;
+      String? package;
+      if (pickZip) {
+        final result = await FilePicker.platform.pickFiles(
+          dialogTitle: '选择 Quelyt 备份压缩包 (.zip)',
+          type: FileType.custom,
+          allowedExtensions: const ['zip'],
+          withReadStream: Platform.isAndroid,
+        );
+        final file = result?.files.singleOrNull;
+        if (file == null || !mounted) return;
+        if (file.path != null && await File(file.path!).exists()) {
+          package = file.path!;
+        } else if (file.readStream != null) {
+          stagedZipDir = await Directory.systemTemp.createTemp('quelyt_restore_zip_');
+          final target = File(
+            p.join(stagedZipDir.path, file.name.isEmpty ? 'backup.zip' : file.name),
+          );
+          final sink = target.openWrite();
+          try {
+            await sink.addStream(file.readStream!);
+          } finally {
+            await sink.close();
+          }
+          package = target.path;
+        }
+      } else {
+        package = await FilePicker.platform.getDirectoryPath(
+          dialogTitle: '选择 Quelyt 备份文件夹',
+        );
+      }
       if (package == null || !mounted) return;
       final validation = await LibraryBackupService.validate(package);
       if (!mounted) return;
@@ -636,7 +757,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(
-                '${validation.documents} 份资料 · 数据库版本 v${validation.schemaVersion}'
+                '${validation.documents} 份资料 · '
+                '${validation.reviewAssets} 项复习图片 · '
+                '数据库版本 v${validation.schemaVersion}'
                 '${validation.createdAt.isEmpty ? '' : ' · ${validation.createdAt}'}',
                 style: context.texts.bodySmall!.copyWith(fontSize: 12.5),
               ),
@@ -687,6 +810,12 @@ class _SettingsDialogState extends State<SettingsDialog> {
     } catch (error) {
       if (!mounted) return;
       setState(() => _notice = '恢复准备失败：$error');
+    } finally {
+      if (stagedZipDir != null && await stagedZipDir.exists()) {
+        try {
+          await stagedZipDir.delete(recursive: true);
+        } catch (_) {}
+      }
     }
   }
 
@@ -1226,6 +1355,22 @@ class _SettingsDialogState extends State<SettingsDialog> {
               },
             ),
           ),
+          if (Platform.isAndroid)
+            ValueListenableBuilder<TextEditingValue>(
+              valueListenable: _url,
+              builder: (context, value, _) {
+                if (!_isLoopbackAddress(value.text)) {
+                  return const SizedBox.shrink();
+                }
+                return const Padding(
+                  padding: EdgeInsets.only(top: Space.sm),
+                  child: TrustNote(
+                    'Android 设备上的 localhost / 127.0.0.1 指向手机自身，无法连到电脑上的本地模型服务；请填写同一局域网电脑 IP 或 HTTPS 反代地址。',
+                    icon: QIcons.warning,
+                  ),
+                );
+              },
+            ),
           _row(
             context,
             '文本模型',
@@ -1412,14 +1557,22 @@ class _SettingsDialogState extends State<SettingsDialog> {
         _row(
           context,
           '整库备份',
-          description: '含原件、数据库与全部学习数据（不含 API Key），默认含回收站。',
+          description: '含原件、复习图片、数据库与全部学习数据（不含 API Key），默认含回收站。',
           control: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               OutlinedButton.icon(
-                onPressed: () => _backupLibrary(),
+                onPressed: () => _backupLibrary(asZip: true),
                 icon: const QIcon(QIcons.archive, size: IconSizes.sm),
-                label: const Text('选择位置并备份'),
+                label: const Text('导出备份压缩包 (.zip)'),
               ),
+              if (FileReveal.canOpenFolder) ...[
+                const SizedBox(height: 6),
+                OutlinedButton(
+                  onPressed: () => _backupLibrary(asZip: false),
+                  child: const Text('备份为文件夹'),
+                ),
+              ],
               TextButton(
                 onPressed: () => _backupLibrary(includeTrash: false),
                 child: const Text('备份但不含回收站'),
@@ -1430,11 +1583,23 @@ class _SettingsDialogState extends State<SettingsDialog> {
         _row(
           context,
           '整库恢复',
-          description: '校验后于下次启动时替换；原库移至 pre-restore，失败自动回滚。',
-          control: OutlinedButton.icon(
-            onPressed: _restoreLibrary,
-            icon: const QIcon(QIcons.restore, size: IconSizes.sm),
-            label: const Text('选择备份并准备恢复'),
+          description: '支持 .quelyt-backup.zip 或备份文件夹；校验后于下次启动替换，原库移至 pre-restore。',
+          control: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              OutlinedButton.icon(
+                onPressed: () => _restoreLibrary(fromZip: true),
+                icon: const QIcon(QIcons.restore, size: IconSizes.sm),
+                label: const Text('从备份压缩包恢复 (.zip)'),
+              ),
+              if (FileReveal.canOpenFolder) ...[
+                const SizedBox(height: 6),
+                OutlinedButton(
+                  onPressed: () => _restoreLibrary(fromZip: false),
+                  child: const Text('从备份文件夹恢复'),
+                ),
+              ],
+            ],
           ),
         ),
         _row(

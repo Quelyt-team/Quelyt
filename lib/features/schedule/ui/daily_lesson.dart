@@ -44,7 +44,8 @@ class _DailyLessonDialog extends StatefulWidget {
   State<_DailyLessonDialog> createState() => _DailyLessonDialogState();
 }
 
-class _DailyLessonDialogState extends State<_DailyLessonDialog> {
+class _DailyLessonDialogState extends State<_DailyLessonDialog>
+    with WidgetsBindingObserver {
   late DailyLesson? _lesson = widget.controller.lessonForTask(widget.task.id);
   final _answers = <String, TextEditingController>{};
   final _revealed = <String>{};
@@ -62,9 +63,22 @@ class _DailyLessonDialogState extends State<_DailyLessonDialog> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadDrafts();
     _syncAnswers();
     WidgetsBinding.instance.addPostFrameCallback((_) => _restoreScroll());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _saveTimer?.cancel();
+      _saveScroll();
+      _persistDrafts();
+    }
   }
 
   void _restoreScroll() {
@@ -134,6 +148,7 @@ class _DailyLessonDialogState extends State<_DailyLessonDialog> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _saveTimer?.cancel();
     _saveScroll();
     _persistDrafts();

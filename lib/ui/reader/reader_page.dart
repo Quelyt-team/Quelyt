@@ -53,10 +53,10 @@ class ReaderPage extends StatefulWidget {
   final VoidCallback? onOpenOcrSettings;
 
   @override
-  State<ReaderPage> createState() => _ReaderPageState();
+  State<ReaderPage> createState() => ReaderPageState();
 }
 
-class _ReaderPageState extends State<ReaderPage>
+class ReaderPageState extends State<ReaderPage>
     with SingleTickerProviderStateMixin {
   final _pageKey = GlobalKey<PageSurfaceState>();
   final Set<int> _dismissedCallouts = {};
@@ -72,6 +72,25 @@ class _ReaderPageState extends State<ReaderPage>
   _ReaderMode _mode = _ReaderMode.desktop;
 
   StudyController get c => widget.controller;
+
+  /// Closes active transient overlays (compact bottom sheet, medium drawer, or
+  /// active page selection) before leaving the reader.
+  bool handleBackNavigation() {
+    if (_mode == _ReaderMode.compact &&
+        (_sheetFraction ?? _collapsedFraction) > _collapsedFraction + .01) {
+      setState(() => _sheetFraction = _collapsedFraction);
+      return true;
+    }
+    if (_mode == _ReaderMode.medium && _drawerOpen) {
+      setState(() => _drawerOpen = false);
+      return true;
+    }
+    if (c.selection != null) {
+      c.select(null);
+      return true;
+    }
+    return false;
+  }
 
   @override
   void initState() {
@@ -522,10 +541,11 @@ class _ReaderPageState extends State<ReaderPage>
                     Expanded(
                       child: LayoutBuilder(
                         builder: (context, inner) {
-                          // The sheet animates its height; laying the panel
-                          // out at a stable minimum prevents a transient
-                          // overflow before the animation settles.
-                          final layoutHeight = math.max(inner.maxHeight, 300.0);
+                          // Only enforce a floor during active dragging so the
+                          // sheet header/panel stays readable without hiding the
+                          // composer behind OverflowBox when the IME shrinks height.
+                          final minFloor = _draggingSheet ? 220.0 : 0.0;
+                          final layoutHeight = math.max(inner.maxHeight, minFloor);
                           return ClipRect(
                             child: OverflowBox(
                               alignment: Alignment.topCenter,
@@ -728,8 +748,13 @@ class _ReaderPageState extends State<ReaderPage>
             : '已索引 $ready 页';
         final statusColor = colors.inkMuted;
         return Container(
-          height: AppChrome.titleBarHeight,
-          padding: EdgeInsets.symmetric(horizontal: narrow ? 6 : 16),
+          constraints: BoxConstraints(
+            minHeight: AppChrome.titleBarHeight,
+          ),
+          padding: EdgeInsets.symmetric(
+            horizontal: narrow ? 6 : 16,
+            vertical: 2,
+          ),
           decoration: BoxDecoration(
             color: colors.surface,
             border: Border(bottom: BorderSide(color: colors.outline)),
@@ -741,9 +766,9 @@ class _ReaderPageState extends State<ReaderPage>
                 child: TextButton.icon(
                   onPressed: c.sending ? null : widget.onBack,
                   style: TextButton.styleFrom(
-                    minimumSize: Size(0, narrow ? 32 : 36),
+                    minimumSize: Size(narrow ? 44 : 0, narrow ? 44 : 36),
                     padding: EdgeInsets.symmetric(
-                      horizontal: narrow ? 7 : 10,
+                      horizontal: narrow ? 8 : 10,
                       vertical: 6,
                     ),
                     foregroundColor: narrow ? colors.inkMuted : colors.ink,
@@ -983,9 +1008,9 @@ class _PageStepper extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    final buttonSize = compact ? 30.0 : 34.0;
+    final buttonSize = compact ? 38.0 : 34.0;
     return Container(
-      height: compact ? 32 : 36,
+      constraints: BoxConstraints(minHeight: compact ? 40 : 36),
       decoration: BoxDecoration(
         color: c.surfaceRaised,
         borderRadius: BorderRadius.circular(Radii.sm),

@@ -1,5 +1,14 @@
 ﻿# 更新记录
 
+## v0.3.0-dev+34 — 未发布（2026-11-16，Android 手机与平板端适配第一轮）
+
+在保留 Windows 桌面交互不变的基础上，完成 Android 构建基线、SAF/Share 文件边界、跨端整库 `.zip` 迁移、手机/平板多窗格与 200% 字体缩放适配、后台/杀进程恢复以及预测式返回层级收口。
+
+- **Android 构建与原生通道（SDK / Manifest / Kotlin）**：[`android/app/build.gradle.kts`](android/app/build.gradle.kts) 支持 `android/key.properties` 发布签名与 `-Ptarget-platform` ABI 裁剪（显式 `abiFilters`）；`minSdk >= 24`，`AndroidManifest.xml` 启用 `enableOnBackInvokedCallback="true"`、`adjustResize` 与 `ACTION_VIEW` / `SEND` / `SEND_MULTIPLE` 文档接收，并配置受限 `FileProvider`（`file_paths.xml`）；新增 `AndroidPlatformPlugin.kt` 与 Dart 侧 [`PlatformFileAccess`](lib/services/platform_file_access.dart) 对接 SAF 选目录流式拷贝、SAF 另存为、`Intent.ACTION_SEND` 分享、外部打开及冷/热启动分享队列消费。
+- **跨端文件边界与整库 `.zip` 备份（formatVersion 2）**：新增 `archive ^4.6.0` 离线打包，书库导出支持移动端 `.zip` 与 SAF 保存/分享；[`LibraryBackupService`](lib/features/library/services/library_backup_service.dart) 新增带 Zip-Slip 校验的 `.zip` 备份与还原，同步纳入 `review_assets` 附件并于还原后重写 `review_asset_refs.asset_path` 与 `review_items.data.imagePath`；设置页 [`SettingsDialog`](lib/ui/settings/settings_dialog.dart) 新增 Android 下回环地址 AI 端点提示。
+- **手机 / 平板自适应与生命周期恢复**：新增 [`AdaptiveLayout`](lib/ui/theme/adaptive_layout.dart)（Compact / Medium / Expanded + `isCompactHeight`）与 48dp 最小触控目标工具；放开全局 `1.35` 系统字体缩放上限，重构底部导航、日程月历/待办面板/规划表、复习 FSRS 评分按钮组与核对栏、笔记返回键与阅读器键盘避让在 `360dp` 与 `2.0x` 缩放下的排版；[`ReviewController`](lib/features/review/review_controller.dart) 补齐 `resumeActiveItemTimer()` 与页面 `WidgetsBindingObserver` / `PopScope`；[`StudyHome`](lib/ui/study_app.dart) 接入入站分享对话框与全应用逐级返回仲裁。
+- **验证基线（2026-11-16）**：`dart analyze lib test` 0 错误、0 警告（1 条既有 `notes_migration_test.dart` 弃用 `info`）；`flutter test --no-pub` **346 项通过、0 项失败**（1 项需设置 `BOOK_QA_LIVE=1` 与 `DEEPSEEK_API_KEY` 的实时联网测试跳过）；`flutter build apk --release --no-pub --target-platform android-arm64` 构建产出 `42.3MB` (`44406887` bytes) `0.3.0-dev+34` Release APK，验证仅含 `lib/arm64-v8a/*.so`（9 个 `.so`）且 `zipalign -c -v -P 16 4` 通过 16 KB 对齐校验。真机/平板物理交互测试尚未在本环境执行。
+
 ## v0.3.0-dev — 未发布（2026-11-13，复习系统升级、交互动效打磨与日程跳转增强）
 
 在笔记系统之上完成复习系统重构、书库/全局交互与文案梳理，以及日程跳转与 AI 规划对话栏优化：
@@ -12,7 +21,7 @@
 
 ## v0.3.0-dev — 未发布（2026-11-10，笔记系统第一版）
 
-笔记从“绑定单页资料的卡片”升级为独立、可持续编辑的学习成果；资料库、日程和问答保持原有结构。详细边界见 [笔记实现说明](docs/笔记实现说明.md)。
+笔记从“绑定单页资料的卡片”升级为独立、可持续编辑的学习成果；资料库、日程和问答保持原有结构。
 
 - 独立笔记：空白、仅问题、仅摘录均可保存；标题、正文、文件夹、标签、问题、来源和生命周期独立于来源资料。
 - 全局入口：侧边栏与窄屏底部导航新增“笔记”；范围、共享文件夹树和标签筛选挂在全局 `AppSidebar`，页面内为笔记列表 + 编辑器，窄屏逐级打开。
@@ -33,7 +42,7 @@
 
 ## v0.2.0-dev — 未发布（2026-11-10，资料库首轮）
 
-资料管理首轮：导入不再要求先选教材或论文，改为“一个主文件夹位置＋快捷方式＋标签”，并补齐批量导入、树状整理、回收站恢复和原件导出。范围、未完成项与验证见 [资料库实现说明](docs/资料库实现说明.md)。
+资料管理首轮：导入不再要求先选教材或论文，改为“一个主文件夹位置＋快捷方式＋标签”，并补齐批量导入、树状整理、回收站恢复和原件导出。
 
 - 导入：文件、文件夹与混合来源进入同一队列；扫描目录并先显示可导入数、总大小、不支持与无法读取项；保留子目录结构；同哈希按“同目录已存在／异地建快捷方式／回收站中不自动恢复”分别处理。
 - 外部拖入：书库页面接收系统文件/文件夹拖放，显示当前目标并进入同一导入队列；采用 `desktop_drop 0.8.4`（0.9.x 的 `cross_file ^0.4` 与当前 `file_picker 10.3.10` 冲突），Windows Release 构建通过，Android 真机未验收。
@@ -68,7 +77,7 @@
 
 ## v0.2.0-dev — 未发布（2026-11-08，教材问答调整）
 
-教材问答从“只依据当前页／本次页段”改为“理解整书 → 检索全书 → 真实联网补充 → 分列出处”。详细边界见 [教材问答实现说明](docs/教材问答实现说明.md)。
+教材问答从“只依据当前页／本次页段”改为“理解整书 → 检索全书 → 真实联网补充 → 分列出处”。
 
 - 调整日程布局：把“日历/学习路径、月/列表、显示内容”切换条移入左侧日历区域，不再占据右侧日详情顶部；右侧栏标题回到与日历顶部对齐的位置。
 - 新增 1 项显示内容菜单测试（总计 249 项）。
@@ -141,4 +150,4 @@
 - 同资料同小节的有限历史上下文；按页分配导读预算，说明局部覆盖。
 - 静态分析、91 项测试、Windows 原生 OCR、Release 构建通过；本机安装文件与构建一致。
 
-验收边界及复现记录见 [首版验收](docs/首版验收.md)。真实 AI 质量、完整窗口端到端流程和 Android 真机尚未完成验收。
+真实 AI 质量、完整窗口端到端流程和 Android 真机尚未完成验收。

@@ -1,7 +1,7 @@
 ﻿name: local_study
 description: 本地优先、带原文出处的教材自学与论文精读客户端。
 publish_to: none
-version: 0.3.0-dev+33
+version: 0.3.0-dev+34
 
 environment:
   sdk: '>=3.13.0 <4.0.0'
@@ -11,6 +11,7 @@ dependencies:
     sdk: flutter
   flutter_localizations:
     sdk: flutter
+  archive: ^4.6.0
   crypto: ^3.0.6
   desktop_drop: 0.8.4
   file_picker: ^10.3.10

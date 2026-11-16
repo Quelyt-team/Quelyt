@@ -1,10 +1,13 @@
-﻿import 'package:flutter/material.dart';
+﻿import 'dart:math' as math;
+
+import 'package:flutter/material.dart';
 
 import '../../core/models.dart';
 import '../../features/library/library_controller.dart';
 import '../../features/library/ui/library_tree.dart';
 import '../../features/notes/notes_controller.dart';
 import '../../features/notes/ui/notes_sidebar_tree.dart';
+import '../theme/adaptive_layout.dart';
 import '../theme/tokens.dart';
 import '../widgets/app_surfaces.dart';
 import '../widgets/quelyt_mark.dart';
@@ -68,35 +71,41 @@ class AppBottomNav extends StatelessWidget {
       ),
       child: SafeArea(
         top: false,
-        child: SizedBox(
-          height: 60,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 60),
           child: Row(
             children: [
               for (final item in AppSection.values)
                 Expanded(
                   child: InkWell(
                     onTap: () => onSelect(item),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        QIcon(
-                          item.icon,
-                          size: IconSizes.md,
-                          color: item == section ? c.ink : c.inkMuted,
-                          active: item == section,
-                        ),
-                        const SizedBox(height: 3),
-                        Text(
-                          item.shortLabel,
-                          style: context.texts.bodySmall!.copyWith(
-                            fontSize: 12,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          QIcon(
+                            item.icon,
+                            size: IconSizes.md,
                             color: item == section ? c.ink : c.inkMuted,
-                            fontWeight: item == section
-                                ? FontWeight.w600
-                                : FontWeight.w400,
+                            active: item == section,
                           ),
-                        ),
-                      ],
+                          const SizedBox(height: 3),
+                          Text(
+                            item.shortLabel,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: context.texts.bodySmall!.copyWith(
+                              fontSize: 12,
+                              color: item == section ? c.ink : c.inkMuted,
+                              fontWeight: item == section
+                                  ? FontWeight.w600
+                                  : FontWeight.w400,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -585,8 +594,16 @@ class UnifiedHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.colors;
     final sidebarOpen = showSidebarToggle && !sidebarCollapsed;
+    final buttonExtent = (compact || AdaptiveLayout.isTouchFirstPlatform)
+        ? 44.0
+        : 34.0;
     return Container(
-      height: AppChrome.titleBarHeight,
+      constraints: BoxConstraints(
+        minHeight: math.max(
+          AppChrome.titleBarHeight,
+          (compact || AdaptiveLayout.isTouchFirstPlatform) ? 52 : 48,
+        ),
+      ),
       decoration: BoxDecoration(
         color: c.surface,
         border: Border(bottom: BorderSide(color: c.outline)),
@@ -612,9 +629,9 @@ class UnifiedHeader extends StatelessWidget {
                       tooltip: '展开侧栏（Ctrl+B）',
                       onPressed: onToggleSidebar,
                       visualDensity: VisualDensity.compact,
-                      constraints: const BoxConstraints(
-                        minWidth: 34,
-                        minHeight: 34,
+                      constraints: BoxConstraints(
+                        minWidth: buttonExtent,
+                        minHeight: buttonExtent,
                       ),
                       padding: EdgeInsets.zero,
                       icon: const QIcon(QIcons.sidebar, size: IconSizes.md),
@@ -626,9 +643,9 @@ class UnifiedHeader extends StatelessWidget {
                       tooltip: '设置（Ctrl+,）',
                       onPressed: onOpenSettings,
                       visualDensity: VisualDensity.compact,
-                      constraints: const BoxConstraints(
-                        minWidth: 34,
-                        minHeight: 34,
+                      constraints: BoxConstraints(
+                        minWidth: buttonExtent,
+                        minHeight: buttonExtent,
                       ),
                       padding: EdgeInsets.zero,
                       icon: const QIcon(QIcons.settings, size: IconSizes.md),

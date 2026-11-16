@@ -1,11 +1,21 @@
-﻿import 'package:desktop_drop/desktop_drop.dart';
+﻿import 'dart:io';
+
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:uuid/uuid.dart';
 
+import '../../../services/document_service.dart';
+import '../../../services/platform_file_access.dart';
 import '../../../ui/theme/tokens.dart';
+import '../import/import_models.dart';
 import '../library_controller.dart';
 import 'library_dialogs.dart';
 import 'library_style.dart';
+
+const _importUuid = Uuid();
 
 /// Drops can contain files and directories. Empty paths (for example a
 /// macOS file promise without a readable copy) are skipped and reported by the
@@ -27,15 +37,68 @@ Future<void> pickAndImportFiles(
   LibraryController library,
 ) async {
   try {
+    final useStreamFallback = PlatformFileAccess.instance.isAndroid;
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: const ['pdf', 'png', 'jpg', 'jpeg'],
       withData: false,
+      withReadStream: useStreamFallback,
       allowMultiple: true,
       dialogTitle: '选择要导入的资料',
     );
     if (result == null) return;
-    final paths = [for (final file in result.files) ?file.path];
+    final paths = <String>[];
+    final skipped = <String>[];
+    Directory? fallbackDir;
+    for (final file in result.files) {
+      final directPath = file.path;
+      if (directPath != null && directPath.isNotEmpty) {
+        paths.add(directPath);
+        continue;
+      }
+      final stream = file.readStream;
+      if (stream != null) {
+        fallbackDir ??= Directory(
+          p.join(
+            (await getTemporaryDirectory()).path,
+            'picker_inbox',
+            _importUuid.v4(),
+          ),
+        );
+        await fallbackDir.create(recursive: true);
+        final safeName = _sanitizeFileName(file.name);
+        final staged = await _uniqueFile(fallbackDir, safeName);
+        final sink = staged.openWrite();
+        try {
+          await for (final chunk in stream) {
+            sink.add(chunk);
+          }
+          await sink.flush();
+          await sink.close();
+          if (await staged.length() > 0) {
+            paths.add(staged.path);
+          } else {
+            await staged.delete();
+            skipped.add(file.name);
+          }
+        } catch (_) {
+          await sink.close();
+          if (await staged.exists()) await staged.delete();
+          skipped.add(file.name);
+        }
+        continue;
+      }
+      skipped.add(file.name);
+    }
+    if (skipped.isNotEmpty && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '有 ${skipped.length} 项未能取得可读取内容（可能为远端占位或授权受限）：${skipped.take(3).join('、')}',
+          ),
+        ),
+      );
+    }
     if (paths.isEmpty) return;
     await library.importPaths(paths);
   } catch (error) {
@@ -52,20 +115,40 @@ Future<void> pickAndImportFolder(
   BuildContext context,
   LibraryController library,
 ) async {
+  String? androidStagingDir;
   try {
-    final path = await FilePicker.platform.getDirectoryPath(
-      dialogTitle: '选择要导入的文件夹',
-    );
-    if (path == null || !context.mounted) return;
-    final scan = await library.queue.scanDirectory(path);
+    String? sourcePath;
+    DirectoryScan scan;
+    if (PlatformFileAccess.instance.capabilities.safTree) {
+      final picked = await PlatformFileAccess.instance.pickDirectoryAndStage();
+      if (picked == null || !context.mounted) return;
+      androidStagingDir = picked.stagingDirectory;
+      sourcePath = picked.stagingDirectory;
+      scan = _scanFromPickedTree(picked);
+    } else {
+      final path = await FilePicker.platform.getDirectoryPath(
+        dialogTitle: '选择要导入的文件夹',
+      );
+      if (path == null || !context.mounted) return;
+      sourcePath = path;
+      scan = await library.queue.scanDirectory(path);
+    }
     if (!context.mounted) return;
     if (scan.files.isEmpty) {
+      if (androidStagingDir != null) {
+        await PlatformFileAccess.instance.cleanupStagedDirectory(
+          androidStagingDir,
+        );
+      }
+      if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            scan.unsupported.isEmpty
+            scan.unsupported.isEmpty && scan.unreadable.isEmpty
                 ? '这个文件夹里没有可导入的文件。'
-                : '这个文件夹里没有支持的格式；发现 ${scan.unsupported.length} 个不支持的文件。',
+                : '没有可导入的 PDF / JPG / PNG 文件'
+                      '${scan.unsupported.isNotEmpty ? '（不支持 ${scan.unsupported.length} 个）' : ''}'
+                      '${scan.unreadable.isNotEmpty ? '（无法读取 ${scan.unreadable.length} 项）' : ''}。',
           ),
         ),
       );
@@ -93,19 +176,66 @@ Future<void> pickAndImportFolder(
           const _ScanRow(label: '扫描范围', value: '已到数量上限，只导入已发现文件'),
       ],
     );
-    if (!confirmed || !context.mounted) return;
+    if (!confirmed || !context.mounted) {
+      if (androidStagingDir != null) {
+        await PlatformFileAccess.instance.cleanupStagedDirectory(
+          androidStagingDir,
+        );
+      }
+      return;
+    }
     await library.queue.enqueueDirectory(
-      path,
+      sourcePath,
       scan: scan,
       targetFolderId: library.importTargetFolderId,
       keepStructure: true,
     );
   } catch (error) {
+    if (androidStagingDir != null) {
+      await PlatformFileAccess.instance.cleanupStagedDirectory(
+        androidStagingDir,
+      );
+    }
     if (!context.mounted) return;
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text('文件夹扫描或导入失败：$error')));
   }
+}
+
+DirectoryScan _scanFromPickedTree(PlatformPickedTree picked) {
+  final files = <ScannedFile>[];
+  for (final file in picked.files) {
+    final relDir = p.posix.dirname(file.relativePath);
+    files.add(
+      ScannedFile(
+        path: file.path,
+        name: file.name,
+        extension: p.extension(file.name).toLowerCase(),
+        sizeBytes: file.sizeBytes,
+        relativeDirectory: relDir == '.' ? '' : relDir,
+      ),
+    );
+  }
+  final unsupported = <ScannedFile>[
+    for (final rel in picked.unsupported)
+      ScannedFile(
+        path: rel,
+        name: p.posix.basename(rel),
+        extension: p.extension(rel).toLowerCase(),
+        sizeBytes: 0,
+        relativeDirectory: p.posix.dirname(rel) == '.'
+            ? ''
+            : p.posix.dirname(rel),
+      ),
+  ];
+  return DirectoryScan(
+    rootName: picked.rootName,
+    files: files,
+    unsupported: unsupported,
+    unreadable: picked.unreadable,
+    truncated: picked.truncated,
+  );
 }
 
 Future<String?> pickExportDirectory(BuildContext context) async {
@@ -120,6 +250,31 @@ Future<String?> pickExportDirectory(BuildContext context) async {
     ).showSnackBar(SnackBar(content: Text('选择导出位置失败：$error')));
     return null;
   }
+}
+
+String _sanitizeFileName(String raw) {
+  final cleaned = raw.replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1F]'), '_').trim();
+  if (cleaned.isEmpty || cleaned == '.' || cleaned == '..') {
+    return 'imported_${_importUuid.v4().substring(0, 8)}';
+  }
+  return DocumentService.supportedExtensions.contains(
+        p.extension(cleaned).toLowerCase(),
+      )
+      ? cleaned
+      : cleaned;
+}
+
+Future<File> _uniqueFile(Directory parent, String name) async {
+  var candidate = File(p.join(parent.path, name));
+  if (!await candidate.exists()) return candidate;
+  final stem = p.basenameWithoutExtension(name);
+  final ext = p.extension(name);
+  var i = 2;
+  while (await candidate.exists()) {
+    candidate = File(p.join(parent.path, '${stem}_$i$ext'));
+    i++;
+  }
+  return candidate;
 }
 
 class _ScanRow extends StatelessWidget {

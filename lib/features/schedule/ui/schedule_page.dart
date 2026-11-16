@@ -348,34 +348,33 @@ class SchedulePage extends StatelessWidget {
                           ),
                         ],
                       )
-                    : Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          _ScheduleViewBar(controller: c, wide: false),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
-                            child: c.calendarMode == CalendarDisplayMode.list
-                                ? SizedBox(
-                                    height: 420,
-                                    child: SingleChildScrollView(
-                                      child: _AgendaList(controller: c),
-                                    ),
-                                  )
-                                : _calendarTransition(context, c),
-                          ),
-                          const SizedBox(height: 8),
-                          Expanded(
-                            child: _DayPanel(
+                    : SingleChildScrollView(
+                        padding: const EdgeInsets.only(bottom: 16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _ScheduleViewBar(controller: c, wide: false),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                              ),
+                              child: c.calendarMode == CalendarDisplayMode.list
+                                  ? _AgendaList(controller: c)
+                                  : _calendarTransition(context, c),
+                            ),
+                            const SizedBox(height: 8),
+                            _DayPanel(
                               controller: c,
                               wide: false,
+                              shrinkWrap: true,
                               onOpenMaterial: onOpenMaterial,
                               onAdd: () => _addTask(context),
                               onMenu: (action) => _handleMenu(context, action),
                               onBlockAction: (block, action) =>
                                   _handleBlockAction(context, block, action),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
               ),
               if (!wide)
@@ -3018,21 +3017,27 @@ class _DayCell extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(
-                      '${date.day}',
-                      style: context.texts.bodySmall!.copyWith(
-                        fontSize: compact ? 12 : 13.5,
-                        color: inMonth
-                            ? (selected ? c.ink : c.ink)
-                            : c.inkMuted.withValues(alpha: .5),
-                        fontWeight: selected || today
-                            ? FontWeight.w700
-                            : FontWeight.w500,
-                        fontFeatures: AppNumerals.tabular,
+                    Flexible(
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          '${date.day}',
+                          style: context.texts.bodySmall!.copyWith(
+                            fontSize: compact ? 12 : 13.5,
+                            color: inMonth
+                                ? (selected ? c.ink : c.ink)
+                                : c.inkMuted.withValues(alpha: .5),
+                            fontWeight: selected || today
+                                ? FontWeight.w700
+                                : FontWeight.w500,
+                            fontFeatures: AppNumerals.tabular,
+                          ),
+                        ),
                       ),
                     ),
-                    const Spacer(),
                     if (summary.hasExam)
                       _CellMarker(label: '考', emphasized: true),
                     if (summary.isRest) _CellMarker(label: '休'),
@@ -3134,6 +3139,7 @@ class _DayPanel extends StatelessWidget {
   const _DayPanel({
     required this.controller,
     required this.wide,
+    this.shrinkWrap = false,
     required this.onOpenMaterial,
     required this.onAdd,
     required this.onMenu,
@@ -3143,6 +3149,7 @@ class _DayPanel extends StatelessWidget {
 
   final ScheduleController controller;
   final bool wide;
+  final bool shrinkWrap;
   final Future<void> Function(MaterialRef material) onOpenMaterial;
   final VoidCallback onAdd;
   final ValueChanged<_MenuAction> onMenu;
@@ -3368,29 +3375,29 @@ class _DayPanel extends StatelessWidget {
               ),
             ),
           ),
-        Expanded(
-          child: blocks.isEmpty
-              ? Center(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.all(16),
-                    child: EmptyState(
-                      icon: QIcons.done,
-                      title: summary.isRest ? '今天休息' : '当天暂无安排',
-                      message: summary.isRest
-                          ? '如需排课，可在右上角恢复每周安排。'
-                          : '可新增学习任务或个人占用。',
-                      compact: true,
-                      action: summary.isRest
-                          ? null
-                          : OutlinedButton.icon(
-                              onPressed: onAdd,
-                              icon: const QIcon(QIcons.add, size: IconSizes.sm),
-                              label: const Text('新增安排'),
-                            ),
-                    ),
+        if (shrinkWrap)
+          blocks.isEmpty
+              ? Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: EmptyState(
+                    icon: QIcons.done,
+                    title: summary.isRest ? '今天休息' : '当天暂无安排',
+                    message: summary.isRest
+                        ? '如需排课，可在右上角恢复每周安排。'
+                        : '可新增学习任务或个人占用。',
+                    compact: true,
+                    action: summary.isRest
+                        ? null
+                        : OutlinedButton.icon(
+                            onPressed: onAdd,
+                            icon: const QIcon(QIcons.add, size: IconSizes.sm),
+                            label: const Text('新增安排'),
+                          ),
                   ),
                 )
               : ListView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
                   padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
                   itemCount: blocks.length,
                   itemBuilder: (context, index) {
@@ -3401,8 +3408,43 @@ class _DayPanel extends StatelessWidget {
                       onAction: (action) => onBlockAction(block, action),
                     );
                   },
-                ),
-        ),
+                )
+        else
+          Expanded(
+            child: blocks.isEmpty
+                ? Center(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(16),
+                      child: EmptyState(
+                        icon: QIcons.done,
+                        title: summary.isRest ? '今天休息' : '当天暂无安排',
+                        message: summary.isRest
+                            ? '如需排课，可在右上角恢复每周安排。'
+                            : '可新增学习任务或个人占用。',
+                        compact: true,
+                        action: summary.isRest
+                            ? null
+                            : OutlinedButton.icon(
+                                onPressed: onAdd,
+                                icon: const QIcon(QIcons.add, size: IconSizes.sm),
+                                label: const Text('新增安排'),
+                              ),
+                      ),
+                    ),
+                  )
+                : ListView.builder(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                    itemCount: blocks.length,
+                    itemBuilder: (context, index) {
+                      final block = blocks[index];
+                      return _BlockTile(
+                        controller: controller,
+                        block: block,
+                        onAction: (action) => onBlockAction(block, action),
+                      );
+                    },
+                  ),
+          ),
         if (wide)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),

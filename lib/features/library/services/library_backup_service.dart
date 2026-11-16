@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:archive/archive_io.dart';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart';
@@ -20,18 +21,24 @@ class BackupReport {
     required this.path,
     required this.documents,
     required this.bytes,
+    this.reviewAssets = 0,
     this.includeTrash = true,
+    this.isZip = false,
     this.warnings = const [],
   });
 
   final String path;
   final int documents;
   final int bytes;
+  final int reviewAssets;
   final bool includeTrash;
+  final bool isZip;
   final List<String> warnings;
 
   String get summary =>
-      '已备份 $documents 份资料 · ${_size(bytes)}'
+      '已备份 $documents 份资料'
+      '${reviewAssets > 0 ? ' · $reviewAssets 张复习图片' : ''}'
+      ' · ${_size(bytes)}'
       '${warnings.isEmpty ? '' : ' · ${warnings.length} 个提醒'}';
 
   static String _size(int bytes) => bytes < 1024 * 1024
@@ -45,6 +52,7 @@ class BackupValidation {
     this.manifest,
     this.schemaVersion = 0,
     this.documents = 0,
+    this.reviewAssets = 0,
     this.bytes = 0,
     this.errors = const [],
     this.warnings = const [],
@@ -54,6 +62,7 @@ class BackupValidation {
   final Map<String, dynamic>? manifest;
   final int schemaVersion;
   final int documents;
+  final int reviewAssets;
   final int bytes;
   final List<String> errors;
   final List<String> warnings;
@@ -90,12 +99,17 @@ class LibraryBackupService {
   final LocalStore store;
   final DocumentService documents;
 
-  static const int formatVersion = 1;
+  static const int formatVersion = 2;
+  static const List<int> supportedFormatVersions = [1, 2];
   static const String manifestName = 'manifest.json';
   static const String databaseName = 'library.sqlite3';
+  static const String reviewAssetsDirName = 'review_assets';
+  static const String zipExtension = '.quelyt-backup.zip';
   static const String _stagingName = 'restore-staging';
   static const String _requestName = 'restore-request.json';
   static const String _resultName = 'restore-result.json';
+  static const int _maxZipEntries = 100000;
+  static const int _maxZipUncompressedBytes = 2 * 1024 * 1024 * 1024;
 
   Future<BackupReport> create(
     String destination, {
@@ -105,17 +119,8 @@ class LibraryBackupService {
     if (!await destinationDirectory.exists()) {
       throw const LibraryBackupException('备份位置不存在。');
     }
-    final managed = p.normalize(p.absolute(documents.directory.path));
-    final target = p.normalize(p.absolute(destination));
-    if (target == managed || p.isWithin(managed, target)) {
-      throw const LibraryBackupException('不能把备份写入应用托管目录。');
-    }
-    final stamp = DateTime.now()
-        .toUtc()
-        .toIso8601String()
-        .replaceAll(':', '')
-        .replaceAll('.', '')
-        .replaceAll('-', '');
+    _ensureOutsideManaged(destination);
+    final stamp = _backupStamp();
     var name = 'Quelyt-backup-$stamp';
     var counter = 2;
     while (await Directory(p.join(destination, name)).exists()) {
@@ -127,96 +132,20 @@ class LibraryBackupService {
     );
     if (await temp.exists()) await temp.delete(recursive: true);
     await temp.create(recursive: true);
-    final warnings = <String>[];
     try {
-      final databaseFile = File(p.join(temp.path, databaseName));
-      store.snapshotTo(databaseFile.path);
-      _sanitizeSnapshot(databaseFile.path, includeTrash: includeTrash);
-      final schemaVersion = _schemaVersion(databaseFile.path);
-      final databaseHash = await _sha256(databaseFile);
-      final databaseBytes = await databaseFile.length();
-
-      final entries = <Map<String, Object?>>[];
-      var bytes = databaseBytes;
-      final documentsInBackup = store
-          .getDocuments(includeTrashed: includeTrash)
-          .toList();
-      for (final document in documentsInBackup) {
-        var extension = p.extension(document.filePath).toLowerCase();
-        if (extension.isEmpty && document.format.isNotEmpty) {
-          extension = '.${document.format.toLowerCase()}';
-        }
-        final relative = 'originals/${document.id}/original$extension';
-        final source = File(document.filePath);
-        if (!await source.exists()) {
-          warnings.add('${document.title}：托管原件缺失，备份只含记录。');
-          entries.add({
-            'id': document.id,
-            'contentHash': document.contentHash,
-            'format': document.format,
-            'relativePath': null,
-            'missing': true,
-            'trashed': !document.isActive,
-          });
-          continue;
-        }
-        final targetFile = File(p.join(temp.path, relative));
-        await targetFile.parent.create(recursive: true);
-        await _copyStreaming(source, targetFile);
-        final hash = await _sha256(targetFile);
-        final size = await targetFile.length();
-        bytes += size;
-        if (hash != document.contentHash) {
-          warnings.add('${document.title}：托管副本与记录的哈希不一致。');
-        }
-        entries.add({
-          'id': document.id,
-          'contentHash': document.contentHash,
-          'format': document.format,
-          'relativePath': relative,
-          'sha256': hash,
-          'size': size,
-          'missing': false,
-          'trashed': !document.isActive,
-        });
-      }
-      final manifest = <String, dynamic>{
-        'formatVersion': formatVersion,
-        'createdAt': DateTime.now().toIso8601String(),
-        'schemaVersion': schemaVersion,
-        'includeTrash': includeTrash,
-        'database': {
-          'relativePath': databaseName,
-          'sha256': databaseHash,
-          'size': databaseBytes,
-        },
-        'documents': entries,
-        'counts': {
-          'documents': entries.length,
-          'trashed': entries.where((entry) => entry['trashed'] == true).length,
-          'missing': entries.where((entry) => entry['missing'] == true).length,
-        },
-        'note':
-            '研究数据与原件；API Key 保存在系统凭据库，不进入备份。',
-      };
-      await File(
-        p.join(temp.path, manifestName),
-      ).writeAsString(const JsonEncoder.withIndent('  ').convert(manifest));
-
-      final validation = await validate(temp.path);
-      if (!validation.ok) {
-        throw LibraryBackupException(
-          '备份自检失败：${validation.errors.join('；')}',
-        );
-      }
+      final staged = await _buildPackageInDirectory(
+        temp,
+        includeTrash: includeTrash,
+      );
       final finalDirectory = Directory(p.join(destination, name));
       await temp.rename(finalDirectory.path);
       return BackupReport(
         path: finalDirectory.path,
-        documents: entries.length,
-        bytes: bytes,
+        documents: staged.documents,
+        bytes: staged.bytes,
+        reviewAssets: staged.reviewAssets,
         includeTrash: includeTrash,
-        warnings: warnings,
+        warnings: staged.warnings,
       );
     } catch (_) {
       if (await temp.exists()) await temp.delete(recursive: true);
@@ -224,11 +153,330 @@ class LibraryBackupService {
     }
   }
 
+  /// Builds a portable single-file `.quelyt-backup.zip` backup package
+  /// containing the SQLite snapshot, originals, and review occlusion assets.
+  Future<BackupReport> createZip(
+    String destinationDirectoryPath, {
+    String? fileName,
+    bool includeTrash = true,
+  }) async {
+    final destinationDirectory = Directory(destinationDirectoryPath);
+    if (!await destinationDirectory.exists()) {
+      await destinationDirectory.create(recursive: true);
+    }
+    final resolvedName = (fileName != null && fileName.trim().isNotEmpty)
+        ? fileName.trim()
+        : 'Quelyt-backup-${_backupStamp()}$zipExtension';
+    var targetPath = p.join(destinationDirectory.path, resolvedName);
+    if (await File(targetPath).exists()) {
+      final stem = resolvedName.endsWith(zipExtension)
+          ? resolvedName.substring(0, resolvedName.length - zipExtension.length)
+          : p.basenameWithoutExtension(resolvedName);
+      final ext = resolvedName.endsWith(zipExtension)
+          ? zipExtension
+          : p.extension(resolvedName);
+      var counter = 2;
+      while (await File(targetPath).exists()) {
+        targetPath = p.join(destinationDirectory.path, '$stem-$counter$ext');
+        counter++;
+      }
+    }
+    final tempDir = await Directory.systemTemp.createTemp('quelyt_zip_backup_');
+    final tempZipPath = '$targetPath.tmp';
+    try {
+      final staged = await _buildPackageInDirectory(
+        tempDir,
+        includeTrash: includeTrash,
+      );
+      final encoder = ZipFileEncoder();
+      await encoder.zipDirectory(
+        tempDir,
+        filename: tempZipPath,
+        level: ZipFileEncoder.gzip,
+      );
+      final zipFile = File(tempZipPath);
+      await zipFile.rename(targetPath);
+      final finalBytes = await File(targetPath).length();
+      return BackupReport(
+        path: targetPath,
+        documents: staged.documents,
+        bytes: finalBytes,
+        reviewAssets: staged.reviewAssets,
+        includeTrash: includeTrash,
+        isZip: true,
+        warnings: staged.warnings,
+      );
+    } catch (_) {
+      final tmp = File(tempZipPath);
+      if (await tmp.exists()) await tmp.delete();
+      rethrow;
+    } finally {
+      if (await tempDir.exists()) await tempDir.delete(recursive: true);
+    }
+  }
+
+  void _ensureOutsideManaged(String destination) {
+    final managed = p.normalize(p.absolute(documents.directory.path));
+    final target = p.normalize(p.absolute(destination));
+    if (target == managed || p.isWithin(managed, target)) {
+      throw const LibraryBackupException('不能把备份写入应用托管目录。');
+    }
+  }
+
+  static String _backupStamp() => DateTime.now()
+      .toUtc()
+      .toIso8601String()
+      .replaceAll(':', '')
+      .replaceAll('.', '')
+      .replaceAll('-', '');
+
+  Future<({int documents, int reviewAssets, int bytes, List<String> warnings})>
+  _buildPackageInDirectory(
+    Directory targetDir, {
+    required bool includeTrash,
+  }) async {
+    final warnings = <String>[];
+    final databaseFile = File(p.join(targetDir.path, databaseName));
+    store.snapshotTo(databaseFile.path);
+    _sanitizeSnapshot(databaseFile.path, includeTrash: includeTrash);
+    final schemaVersion = _schemaVersion(databaseFile.path);
+    final databaseHash = await _sha256(databaseFile);
+    final databaseBytes = await databaseFile.length();
+
+    final entries = <Map<String, Object?>>[];
+    var bytes = databaseBytes;
+    final documentsInBackup = store
+        .getDocuments(includeTrashed: includeTrash)
+        .toList();
+    for (final document in documentsInBackup) {
+      var extension = p.extension(document.filePath).toLowerCase();
+      if (extension.isEmpty && document.format.isNotEmpty) {
+        extension = '.${document.format.toLowerCase()}';
+      }
+      final relative = 'originals/${document.id}/original$extension';
+      final source = File(document.filePath);
+      if (!await source.exists()) {
+        warnings.add('${document.title}：托管原件缺失，备份只含记录。');
+        entries.add({
+          'id': document.id,
+          'contentHash': document.contentHash,
+          'format': document.format,
+          'relativePath': null,
+          'missing': true,
+          'trashed': !document.isActive,
+        });
+        continue;
+      }
+      final targetFile = File(p.join(targetDir.path, relative));
+      await targetFile.parent.create(recursive: true);
+      await _copyStreaming(source, targetFile);
+      final hash = await _sha256(targetFile);
+      final size = await targetFile.length();
+      bytes += size;
+      if (hash != document.contentHash) {
+        warnings.add('${document.title}：托管副本与记录的哈希不一致。');
+      }
+      entries.add({
+        'id': document.id,
+        'contentHash': document.contentHash,
+        'format': document.format,
+        'relativePath': relative,
+        'sha256': hash,
+        'size': size,
+        'missing': false,
+        'trashed': !document.isActive,
+      });
+    }
+
+    // Collect review image assets (both referenced in SQLite review_items and
+    // any files residing inside <library>/review_assets).
+    final assetEntries = <Map<String, Object?>>[];
+    final collectedNames = <String>{};
+    final referencedAssets = _readReferencedReviewAssets(databaseFile.path);
+    for (final ref in referencedAssets) {
+      final sourcePath = ref.imagePath;
+      final fileName = _safeAssetFileName(p.basename(sourcePath), fallbackId: ref.itemId);
+      final source = await _locateReviewAssetFile(
+        sourcePath: sourcePath,
+        fileName: fileName,
+      );
+      if (source == null) {
+        warnings.add('复习图片缺失：$fileName');
+        assetEntries.add({
+          'itemId': ref.itemId,
+          'fileName': fileName,
+          'relativePath': null,
+          'missing': true,
+        });
+        continue;
+      }
+      if (!collectedNames.add(fileName)) {
+        continue;
+      }
+      final relative = '$reviewAssetsDirName/$fileName';
+      final targetFile = File(p.join(targetDir.path, relative));
+      await targetFile.parent.create(recursive: true);
+      await _copyStreaming(source, targetFile);
+      final hash = await _sha256(targetFile);
+      final size = await targetFile.length();
+      bytes += size;
+      assetEntries.add({
+        'itemId': ref.itemId,
+        'fileName': fileName,
+        'relativePath': relative,
+        'sha256': hash,
+        'size': size,
+        'missing': false,
+      });
+    }
+    final assetsDirectory = Directory(
+      p.join(documents.directory.path, reviewAssetsDirName),
+    );
+    if (await assetsDirectory.exists()) {
+      await for (final entity in assetsDirectory.list(followLinks: false)) {
+        if (entity is! File) continue;
+        final fileName = _safeAssetFileName(p.basename(entity.path));
+        if (!collectedNames.add(fileName)) continue;
+        final relative = '$reviewAssetsDirName/$fileName';
+        final targetFile = File(p.join(targetDir.path, relative));
+        await targetFile.parent.create(recursive: true);
+        await _copyStreaming(entity, targetFile);
+        final hash = await _sha256(targetFile);
+        final size = await targetFile.length();
+        bytes += size;
+        assetEntries.add({
+          'fileName': fileName,
+          'relativePath': relative,
+          'sha256': hash,
+          'size': size,
+          'missing': false,
+        });
+      }
+    }
+
+    final manifest = <String, dynamic>{
+      'formatVersion': formatVersion,
+      'createdAt': DateTime.now().toIso8601String(),
+      'schemaVersion': schemaVersion,
+      'includeTrash': includeTrash,
+      'database': {
+        'relativePath': databaseName,
+        'sha256': databaseHash,
+        'size': databaseBytes,
+      },
+      'documents': entries,
+      'reviewAssets': assetEntries,
+      'counts': {
+        'documents': entries.length,
+        'trashed': entries.where((entry) => entry['trashed'] == true).length,
+        'missing': entries.where((entry) => entry['missing'] == true).length,
+        'reviewAssets': assetEntries.where((entry) => entry['missing'] != true).length,
+      },
+      'note':
+          '研究数据、原件与复习图片；API Key 保存在系统凭据库，不进入备份。',
+    };
+    await File(
+      p.join(targetDir.path, manifestName),
+    ).writeAsString(const JsonEncoder.withIndent('  ').convert(manifest));
+
+    final validation = await _validateDirectory(
+      targetDir.path,
+      displayPath: targetDir.path,
+    );
+    if (!validation.ok) {
+      throw LibraryBackupException(
+        '备份自检失败：${validation.errors.join('；')}',
+      );
+    }
+    return (
+      documents: entries.length,
+      reviewAssets: assetEntries.where((entry) => entry['missing'] != true).length,
+      bytes: bytes,
+      warnings: warnings,
+    );
+  }
+
+  Future<File?> _locateReviewAssetFile({
+    required String sourcePath,
+    required String fileName,
+  }) async {
+    final direct = File(sourcePath);
+    if (await direct.exists()) return direct;
+    final managed = File(
+      p.join(documents.directory.path, reviewAssetsDirName, fileName),
+    );
+    if (await managed.exists()) return managed;
+    return null;
+  }
+
+  static String _safeAssetFileName(String raw, {String? fallbackId}) {
+    final cleaned = raw.replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1F]'), '_').trim();
+    if (cleaned.isEmpty || cleaned == '.' || cleaned == '..') {
+      return '${fallbackId ?? 'asset'}.bin';
+    }
+    return cleaned;
+  }
+
+  static List<({String itemId, String imagePath})> _readReferencedReviewAssets(
+    String databasePath,
+  ) {
+    final db = sqlite3.open(databasePath, mode: OpenMode.readOnly);
+    try {
+      final tables = db
+          .select(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'review_asset_refs'",
+          )
+          .toList();
+      if (tables.isEmpty) return const [];
+      final rows = db.select(
+        "SELECT owner_id, asset_path FROM review_asset_refs WHERE asset_path IS NOT NULL AND TRIM(asset_path) != ''",
+      );
+      return [
+        for (final row in rows)
+          (
+            itemId: row['owner_id'] as String? ?? '',
+            imagePath: row['asset_path'] as String? ?? '',
+          ),
+      ];
+    } finally {
+      db.close();
+    }
+  }
+
   static Future<BackupValidation> validate(String packagePath) async {
-    final directory = Directory(packagePath);
+    if (await File(packagePath).exists()) {
+      return validateZip(packagePath);
+    }
+    return _validateDirectory(packagePath, displayPath: packagePath);
+  }
+
+  static Future<BackupValidation> validateZip(String zipPath) async {
+    final file = File(zipPath);
+    if (!await file.exists()) {
+      return BackupValidation(path: zipPath, errors: const ['备份压缩包不存在。']);
+    }
+    final tempDir = await Directory.systemTemp.createTemp('quelyt_zip_val_');
+    try {
+      await _extractZipSafely(zipPath, tempDir.path);
+      return await _validateDirectory(tempDir.path, displayPath: zipPath);
+    } catch (error) {
+      return BackupValidation(
+        path: zipPath,
+        errors: [error.toString()],
+      );
+    } finally {
+      if (await tempDir.exists()) await tempDir.delete(recursive: true);
+    }
+  }
+
+  static Future<BackupValidation> _validateDirectory(
+    String directoryPath, {
+    required String displayPath,
+  }) async {
+    final directory = Directory(directoryPath);
     if (!await directory.exists()) {
       return BackupValidation(
-        path: packagePath,
+        path: displayPath,
         errors: const ['备份文件夹不存在。'],
       );
     }
@@ -237,12 +485,13 @@ class LibraryBackupService {
     Map<String, dynamic>? manifest;
     var schemaVersion = 0;
     var documents = 0;
+    var reviewAssets = 0;
     var bytes = 0;
-    final manifestFile = File(p.join(packagePath, manifestName));
+    final manifestFile = File(p.join(directoryPath, manifestName));
     if (!await manifestFile.exists()) {
       return BackupValidation(
-        path: packagePath,
-        errors: ['缺少 manifest.json。'],
+        path: displayPath,
+        errors: const ['缺少 manifest.json。'],
       );
     }
     try {
@@ -251,53 +500,56 @@ class LibraryBackupService {
       );
     } catch (_) {
       return BackupValidation(
-        path: packagePath,
-        errors: ['manifest.json 无法解析。'],
+        path: displayPath,
+        errors: const ['manifest.json 无法解析。'],
       );
     }
-    if (manifest['formatVersion'] != formatVersion) {
+    final version = manifest['formatVersion'];
+    if (version is! int || !supportedFormatVersions.contains(version)) {
       errors.add('备份格式版本不受支持。');
     }
     final database = manifest['database'];
     if (database is! Map) {
       errors.add('备份缺少数据库信息。');
     } else {
-      final databasePath = p.join(
-        packagePath,
-        database['relativePath'] as String? ?? databaseName,
-      );
-      final databaseFile = File(databasePath);
-      if (!await databaseFile.exists()) {
-        errors.add('备份缺少数据库文件。');
+      final relDb = database['relativePath'] as String? ?? databaseName;
+      final safeDbPath = _resolveWithinRoot(directoryPath, relDb);
+      if (safeDbPath == null) {
+        errors.add('数据库路径非法。');
       } else {
-        final size = await databaseFile.length();
-        bytes += size;
-        final expected = database['sha256'] as String?;
-        if (expected != null && await _sha256(databaseFile) != expected) {
-          errors.add('数据库校验和不匹配。');
-        }
-        if (size != (database['size'] as num?)?.toInt()) {
-          errors.add('数据库大小与清单不一致。');
-        }
-        try {
-          final db = sqlite3.open(databasePath, mode: OpenMode.readOnly);
-          try {
-            final integrity = db
-                .select('PRAGMA integrity_check')
-                .first
-                .values
-                .first;
-            if (integrity != 'ok') errors.add('数据库完整性检查失败。');
-            schemaVersion =
-                db.select('PRAGMA user_version').first.values.first as int;
-            if (schemaVersion > LocalStore.currentSchemaVersion) {
-              errors.add('备份来自更新的应用版本，当前版本无法恢复。');
-            }
-          } finally {
-            db.close();
+        final databaseFile = File(safeDbPath);
+        if (!await databaseFile.exists()) {
+          errors.add('备份缺少数据库文件。');
+        } else {
+          final size = await databaseFile.length();
+          bytes += size;
+          final expected = database['sha256'] as String?;
+          if (expected != null && await _sha256(databaseFile) != expected) {
+            errors.add('数据库校验和不匹配。');
           }
-        } catch (_) {
-          errors.add('数据库无法打开。');
+          if (size != (database['size'] as num?)?.toInt()) {
+            errors.add('数据库大小与清单不一致。');
+          }
+          try {
+            final db = sqlite3.open(safeDbPath, mode: OpenMode.readOnly);
+            try {
+              final integrity = db
+                  .select('PRAGMA integrity_check')
+                  .first
+                  .values
+                  .first;
+              if (integrity != 'ok') errors.add('数据库完整性检查失败。');
+              schemaVersion =
+                  db.select('PRAGMA user_version').first.values.first as int;
+              if (schemaVersion > LocalStore.currentSchemaVersion) {
+                errors.add('备份来自更新的应用版本，当前版本无法恢复。');
+              }
+            } finally {
+              db.close();
+            }
+          } catch (_) {
+            errors.add('数据库无法打开。');
+          }
         }
       }
     }
@@ -313,7 +565,12 @@ class LibraryBackupService {
           warnings.add('清单中有资料缺少原件。');
           continue;
         }
-        final file = File(p.join(packagePath, relative));
+        final resolved = _resolveWithinRoot(directoryPath, relative);
+        if (resolved == null) {
+          errors.add('原件路径越界：$relative');
+          continue;
+        }
+        final file = File(resolved);
         if (!await file.exists()) {
           errors.add('缺少原件：$relative');
           continue;
@@ -334,19 +591,61 @@ class LibraryBackupService {
         }
       }
     }
+    final assetsList = manifest['reviewAssets'];
+    if (assetsList is List) {
+      for (final value in assetsList) {
+        if (value is! Map) continue;
+        final relative = value['relativePath'] as String?;
+        if (relative == null || value['missing'] == true) {
+          warnings.add('清单中有复习图片缺失。');
+          continue;
+        }
+        final resolved = _resolveWithinRoot(directoryPath, relative);
+        if (resolved == null) {
+          errors.add('复习图片路径越界：$relative');
+          continue;
+        }
+        final file = File(resolved);
+        if (!await file.exists()) {
+          errors.add('缺少复习图片：$relative');
+          continue;
+        }
+        reviewAssets++;
+        bytes += await file.length();
+        final hash = await _sha256(file);
+        if (hash != value['sha256']) {
+          errors.add('复习图片校验和不匹配：$relative');
+        }
+        if ((value['size'] as num?)?.toInt() != await file.length()) {
+          errors.add('复习图片大小不匹配：$relative');
+        }
+      }
+    }
     return BackupValidation(
-      path: packagePath,
+      path: displayPath,
       manifest: manifest,
       schemaVersion: schemaVersion,
       documents: documents,
+      reviewAssets: reviewAssets,
       bytes: bytes,
       errors: errors,
       warnings: warnings,
     );
   }
 
-  /// Validates and copies the package into the app's restore staging area.
-  /// Nothing in the live library changes until the next launch applies it.
+  static const List<String> _restoreManagedEntries = [
+    'study.sqlite3',
+    'study.sqlite3-wal',
+    'study.sqlite3-shm',
+    'documents',
+    'review_assets',
+    'cache',
+    'imports',
+  ];
+
+  /// Validates and copies (or extracts if zip) the package into the app's
+  /// restore staging area. Nothing in the live library changes until the next
+  /// launch applies it.
   static Future<BackupValidation> prepareRestore(
     String packagePath,
     String libraryDirectory,
@@ -361,24 +660,47 @@ class LibraryBackupService {
     if (await staging.exists()) await staging.delete(recursive: true);
     await staging.create(recursive: true);
     try {
-      await _copyFile(
-        File(p.join(packagePath, manifestName)),
-        File(p.join(staging.path, manifestName)),
-      );
-      await _copyFile(
-        File(p.join(packagePath, databaseName)),
-        File(p.join(staging.path, databaseName)),
-      );
-      for (final value in validation.manifest!['documents'] as List) {
-        if (value is! Map) continue;
-        final relative = value['relativePath'] as String?;
-        if (relative == null) continue;
+      if (await File(packagePath).exists()) {
+        await _extractZipSafely(packagePath, staging.path);
+      } else {
         await _copyFile(
-          File(p.join(packagePath, relative)),
-          File(p.join(staging.path, relative)),
+          File(p.join(packagePath, manifestName)),
+          File(p.join(staging.path, manifestName)),
         );
+        await _copyFile(
+          File(p.join(packagePath, databaseName)),
+          File(p.join(staging.path, databaseName)),
+        );
+        for (final value in validation.manifest!['documents'] as List) {
+          if (value is! Map) continue;
+          final relative = value['relativePath'] as String?;
+          if (relative == null || value['missing'] == true) continue;
+          final src = _resolveWithinRoot(packagePath, relative);
+          final dst = _resolveWithinRoot(staging.path, relative);
+          if (src == null || dst == null) {
+            throw LibraryBackupException('备份原件路径非法：$relative');
+          }
+          await _copyFile(File(src), File(dst));
+        }
+        final assetsList = validation.manifest!['reviewAssets'];
+        if (assetsList is List) {
+          for (final value in assetsList) {
+            if (value is! Map) continue;
+            final relative = value['relativePath'] as String?;
+            if (relative == null || value['missing'] == true) continue;
+            final src = _resolveWithinRoot(packagePath, relative);
+            final dst = _resolveWithinRoot(staging.path, relative);
+            if (src == null || dst == null) {
+              throw LibraryBackupException('备份复习图片路径非法：$relative');
+            }
+            await _copyFile(File(src), File(dst));
+          }
+        }
       }
-      final staged = await validate(staging.path);
+      final staged = await _validateDirectory(
+        staging.path,
+        displayPath: staging.path,
+      );
       if (!staged.ok) {
         throw LibraryBackupException(
           '暂存副本自检失败：${staged.errors.join('；')}',
@@ -449,14 +771,7 @@ class LibraryBackupService {
     final moved = <String>[];
     try {
       await previous.create(recursive: true);
-      for (final name in [
-        'study.sqlite3',
-        'study.sqlite3-wal',
-        'study.sqlite3-shm',
-        'documents',
-        'cache',
-        'imports',
-      ]) {
+      for (final name in _restoreManagedEntries) {
         final source = FileSystemEntity.typeSync(p.join(library.path, name));
         if (source == FileSystemEntityType.notFound) continue;
         await _moveEntity(p.join(library.path, name), p.join(previous.path, name));
@@ -474,14 +789,41 @@ class LibraryBackupService {
         if (value is! Map) continue;
         final relative = value['relativePath'] as String?;
         if (relative == null) continue;
+        final safeSrc = _resolveWithinRoot(validation.path, relative);
+        if (safeSrc == null) continue;
         final id = value['id'] as String;
         final extension = p.extension(relative);
         final target = File(
           p.join(documentsDirectory.path, id, 'original$extension'),
         );
         await target.parent.create(recursive: true);
-        await _copyFile(File(p.join(validation.path, relative)), target);
+        await _copyFile(File(safeSrc), target);
       }
+      final reviewAssetsDirectory = Directory(
+        p.join(library.path, reviewAssetsDirName),
+      );
+      final assetsList = validation.manifest!['reviewAssets'];
+      if (assetsList is List && assetsList.isNotEmpty) {
+        await reviewAssetsDirectory.create(recursive: true);
+        for (final value in assetsList) {
+          if (value is! Map) continue;
+          final relative = value['relativePath'] as String?;
+          if (relative == null || value['missing'] == true) continue;
+          final safeSrc = _resolveWithinRoot(validation.path, relative);
+          if (safeSrc == null) continue;
+          final fileName = _safeAssetFileName(
+            value['fileName'] as String? ?? p.basename(relative),
+            fallbackId: value['itemId'] as String?,
+          );
+          final target = File(p.join(reviewAssetsDirectory.path, fileName));
+          await target.parent.create(recursive: true);
+          await _copyFile(File(safeSrc), target);
+        }
+      }
+      _rebaseReviewAssetPaths(
+        p.join(library.path, 'study.sqlite3'),
+        reviewAssetsDirectory.path,
+      );
       await _recordResult(
         libraryDirectory,
         RestoreResult(
@@ -501,14 +843,7 @@ class LibraryBackupService {
     } catch (error) {
       // Roll back the files that were moved aside.
       try {
-        for (final name in [
-          'study.sqlite3',
-          'study.sqlite3-wal',
-          'study.sqlite3-shm',
-          'documents',
-          'cache',
-          'imports',
-        ]) {
+        for (final name in _restoreManagedEntries) {
           final target = p.join(library.path, name);
           if (FileSystemEntity.typeSync(target) !=
               FileSystemEntityType.notFound) {
@@ -567,14 +902,7 @@ class LibraryBackupService {
       ).exists()) {
         continue;
       }
-      for (final name in [
-        'study.sqlite3',
-        'study.sqlite3-wal',
-        'study.sqlite3-shm',
-        'documents',
-        'cache',
-        'imports',
-      ]) {
+      for (final name in _restoreManagedEntries) {
         final source = p.join(candidate.path, name);
         if (FileSystemEntity.typeSync(source) ==
             FileSystemEntityType.notFound) {
@@ -730,6 +1058,179 @@ class LibraryBackupService {
       await Directory(path).delete(recursive: true);
     } else if (type == FileSystemEntityType.file) {
       await File(path).delete();
+    }
+  }
+
+  /// Resolves [relative] strictly under [root], rejecting drive-letter paths,
+  /// leading slashes, empty/dotdot segments, and path traversal.
+  static String? _resolveWithinRoot(String root, String relative) {
+    final normalizedRaw = relative.replaceAll('\\', '/').trim();
+    if (normalizedRaw.isEmpty ||
+        normalizedRaw.startsWith('/') ||
+        RegExp(r'^[A-Za-z]:').hasMatch(normalizedRaw)) {
+      return null;
+    }
+    final segments = normalizedRaw.split('/');
+    for (final segment in segments) {
+      if (segment.isEmpty || segment == '.' || segment == '..') {
+        return null;
+      }
+    }
+    final rootNormalized = p.normalize(p.absolute(root));
+    final candidate = p.normalize(p.joinAll([rootNormalized, ...segments]));
+    if (!p.isWithin(rootNormalized, candidate)) {
+      return null;
+    }
+    return candidate;
+  }
+
+  /// Extracts a zip archive to [destinationDir] using streaming IO and
+  /// zip-slip / symlink / decompression-bomb guards.
+  static Future<void> _extractZipSafely(
+    String zipPath,
+    String destinationDir,
+  ) async {
+    final dest = Directory(destinationDir);
+    await dest.create(recursive: true);
+    final input = InputFileStream(zipPath);
+    try {
+      final archive = ZipDecoder().decodeStream(input, verify: true);
+      var entryCount = 0;
+      var totalUncompressed = 0;
+      for (final entry in archive) {
+        entryCount++;
+        if (entryCount > _maxZipEntries) {
+          throw const LibraryBackupException('备份压缩包条目数量过多，已拒绝解压。');
+        }
+        if (entry.isSymbolicLink || entry.isHardLink) {
+          throw LibraryBackupException('备份压缩包包含不安全的链接条目：${entry.name}');
+        }
+        final cleanName = entry.name.replaceAll('\\', '/');
+        final trimmed = cleanName.endsWith('/')
+            ? cleanName.substring(0, cleanName.length - 1)
+            : cleanName;
+        if (trimmed.isEmpty) continue;
+        final targetPath = _resolveWithinRoot(dest.path, trimmed);
+        if (targetPath == null) {
+          throw LibraryBackupException('备份压缩包包含非法路径：${entry.name}');
+        }
+        if (entry.isDirectory) {
+          await Directory(targetPath).create(recursive: true);
+          continue;
+        }
+        totalUncompressed += entry.size;
+        if (totalUncompressed > _maxZipUncompressedBytes) {
+          throw const LibraryBackupException('备份压缩包解压体积超过安全上限。');
+        }
+        final outFile = File(targetPath);
+        await outFile.parent.create(recursive: true);
+        final output = OutputFileStream(outFile.path);
+        try {
+          entry.writeContent(output, freeMemory: true);
+        } finally {
+          await output.close();
+        }
+        final actualSize = await outFile.length();
+        totalUncompressed = totalUncompressed - entry.size + actualSize;
+        if (totalUncompressed > _maxZipUncompressedBytes) {
+          throw const LibraryBackupException('备份压缩包解压体积超过安全上限。');
+        }
+      }
+    } on ArchiveException catch (error) {
+      throw LibraryBackupException('备份压缩包损坏或格式无效：$error');
+    } finally {
+      await input.close();
+    }
+  }
+
+  /// Rewrites stored `review_asset_refs.asset_path` and `review_items.data`
+  /// `imagePath` references so assets moved across OSes or app containers
+  /// resolve to [targetAssetsDir].
+  static void _rebaseReviewAssetPaths(
+    String databasePath,
+    String targetAssetsDir,
+  ) {
+    final db = sqlite3.open(databasePath);
+    try {
+      final tables = db
+          .select(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('review_asset_refs', 'review_items')",
+          )
+          .map((row) => row['name'] as String?)
+          .whereType<String>()
+          .toSet();
+
+      String? resolveRebasedPath(String rawPath, {required String fallbackId}) {
+        final parts = rawPath.split(RegExp(r'[/\\]')).where((e) => e.isNotEmpty);
+        if (parts.isEmpty) return null;
+        final fileName = _safeAssetFileName(parts.last, fallbackId: fallbackId);
+        final candidate = File(p.join(targetAssetsDir, fileName));
+        return candidate.existsSync() ? candidate.path : null;
+      }
+
+      if (tables.contains('review_asset_refs')) {
+        final rows = db.select(
+          "SELECT id, owner_id, asset_path FROM review_asset_refs WHERE asset_path IS NOT NULL AND TRIM(asset_path) != ''",
+        );
+        if (rows.isNotEmpty) {
+          final update = db.prepare(
+            'UPDATE review_asset_refs SET asset_path = ? WHERE id = ?',
+          );
+          try {
+            for (final row in rows) {
+              final id = row['id'] as String?;
+              final ownerId = row['owner_id'] as String?;
+              final rawPath = row['asset_path'] as String?;
+              if (id == null || rawPath == null) continue;
+              final rebased = resolveRebasedPath(
+                rawPath,
+                fallbackId: ownerId ?? id,
+              );
+              if (rebased != null) {
+                update.execute([rebased, id]);
+              }
+            }
+          } finally {
+            update.close();
+          }
+        }
+      }
+
+      if (tables.contains('review_items')) {
+        final rows = db.select(
+          "SELECT id, data FROM review_items WHERE data IS NOT NULL AND TRIM(data) != ''",
+        );
+        if (rows.isNotEmpty) {
+          final update = db.prepare(
+            'UPDATE review_items SET data = ? WHERE id = ?',
+          );
+          try {
+            for (final row in rows) {
+              final id = row['id'] as String?;
+              final rawJson = row['data'] as String?;
+              if (id == null || rawJson == null) continue;
+              final Object? decoded;
+              try {
+                decoded = jsonDecode(rawJson);
+              } catch (_) {
+                continue;
+              }
+              if (decoded is! Map<String, dynamic>) continue;
+              final rawImage = decoded['imagePath'];
+              if (rawImage is! String || rawImage.trim().isEmpty) continue;
+              final rebased = resolveRebasedPath(rawImage, fallbackId: id);
+              if (rebased != null && rebased != rawImage) {
+                decoded['imagePath'] = rebased;
+                update.execute([jsonEncode(decoded), id]);
+              }
+            }
+          } finally {
+            update.close();
+          }
+        }
+      }
+    } finally {
+      db.close();
     }
   }
 }

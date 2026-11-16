@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:archive/archive_io.dart';
 import 'package:path/path.dart' as p;
 
 import '../../../core/models.dart';
@@ -14,6 +15,8 @@ class LibraryExportReport {
     this.renamed = const [],
     this.createdFolders = 0,
     this.destination,
+    this.primaryFilePath,
+    this.isArchive = false,
   });
 
   final int exported;
@@ -23,6 +26,30 @@ class LibraryExportReport {
   final List<String> renamed;
   final int createdFolders;
   final String? destination;
+  final String? primaryFilePath;
+  final bool isArchive;
+
+  LibraryExportReport copyWith({
+    int? exported,
+    int? bytes,
+    int? skippedShortcuts,
+    List<String>? failures,
+    List<String>? renamed,
+    int? createdFolders,
+    String? destination,
+    String? primaryFilePath,
+    bool? isArchive,
+  }) => LibraryExportReport(
+    exported: exported ?? this.exported,
+    bytes: bytes ?? this.bytes,
+    skippedShortcuts: skippedShortcuts ?? this.skippedShortcuts,
+    failures: failures ?? this.failures,
+    renamed: renamed ?? this.renamed,
+    createdFolders: createdFolders ?? this.createdFolders,
+    destination: destination ?? this.destination,
+    primaryFilePath: primaryFilePath ?? this.primaryFilePath,
+    isArchive: isArchive ?? this.isArchive,
+  );
 
   bool get ok => failures.isEmpty;
 
@@ -143,6 +170,7 @@ class LibraryExportService {
     var exported = 0;
     var bytes = 0;
     var skippedShortcuts = 0;
+    String? singleFilePath;
 
     for (final item in items) {
       if (item.isShortcut) {
@@ -195,6 +223,7 @@ class LibraryExportService {
         await _copyStreaming(source, target);
         exported++;
         bytes += await target.length();
+        singleFilePath = exported == 1 ? target.path : null;
       } catch (error) {
         failures.add('${item.displayName}：$error');
         if (await target.exists()) {
@@ -214,7 +243,24 @@ class LibraryExportService {
       renamed: renamed,
       createdFolders: extraCreatedFolders,
       destination: destination,
+      primaryFilePath: exported == 1 ? singleFilePath : null,
     );
+  }
+
+  /// Packages an exported staging directory into a single `.zip` file so
+  /// mobile SAF "Save to" and Android share sheets can transfer multi-file
+  /// exports or folder trees cleanly.
+  Future<String> packDirectoryToZip(
+    String stagingDirectory,
+    String outputZipPath,
+  ) async {
+    final encoder = ZipFileEncoder();
+    await encoder.zipDirectory(
+      Directory(stagingDirectory),
+      filename: outputZipPath,
+      level: ZipFileEncoder.gzip,
+    );
+    return outputZipPath;
   }
 
   Future<void> _copyStreaming(File source, File target) async {

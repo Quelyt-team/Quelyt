@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -25,6 +26,7 @@ import '../features/schedule/ui/daily_lesson.dart';
 import '../features/schedule/ui/schedule_page.dart';
 import '../services/ai_gateway.dart';
 import '../services/document_service.dart';
+import '../services/platform_file_access.dart';
 import 'dialogs/app_dialogs.dart';
 import 'pages/library_page.dart';
 import 'pages/review_page.dart';
@@ -33,6 +35,7 @@ import 'settings/settings_dialog.dart';
 import 'shell/app_shell.dart';
 import 'shell/window_title_bar.dart';
 import 'theme/app_theme.dart';
+import 'widgets/app_dialog.dart';
 import 'widgets/app_surfaces.dart';
 import 'theme/appearance.dart';
 import 'theme/tokens.dart';
@@ -107,16 +110,20 @@ class StudyHome extends StatefulWidget {
   State<StudyHome> createState() => _StudyHomeState();
 }
 
-class _StudyHomeState extends State<StudyHome> {
+class _StudyHomeState extends State<StudyHome> with WidgetsBindingObserver {
   AppSection _section = AppSection.library;
   bool _openPanelOnStart = false;
   bool _sidebarCollapsed = false;
   final _searchController = TextEditingController();
+  final _readerKey = GlobalKey<ReaderPageState>();
   late final ScheduleController _schedule;
   late final BookQaController _bookQa;
   late final LibraryController _library;
   late final NotesController _notes;
   late final Listenable _appListenable;
+  StreamSubscription<PlatformIncomingShare>? _shareSub;
+  bool _handlingShare = false;
+  final List<PlatformStagedFile> _pendingShareQueue = [];
   String _query = '';
   String? _lastOpenedId;
 
@@ -125,6 +132,7 @@ class _StudyHomeState extends State<StudyHome> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     HardwareKeyboard.instance.addHandler(_onGlobalKey);
     _schedule = ScheduleController(
       ScheduleRepository(widget.controller.store),
@@ -156,11 +164,124 @@ class _StudyHomeState extends State<StudyHome> {
       widget.controller.reviewController,
       _bookQa,
       _library,
+      _notes,
+      _schedule,
     ]);
+    _shareSub = PlatformFileAccess.instance.incomingShares.listen(
+      (share) => _enqueueIncomingShares([share]),
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_pollPendingShares());
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_pollPendingShares());
+    } else if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused) {
+      _notes.flushNow();
+    }
+  }
+
+  Future<void> _pollPendingShares() async {
+    final shares = await PlatformFileAccess.instance.consumePendingShares();
+    if (!mounted || shares.isEmpty) return;
+    _enqueueIncomingShares(shares);
+  }
+
+  void _enqueueIncomingShares(List<PlatformIncomingShare> shares) {
+    if (!mounted || shares.isEmpty) return;
+    final items = [for (final share in shares) ...share.items];
+    if (items.isEmpty) return;
+    _pendingShareQueue.addAll(items);
+    if (!_handlingShare) {
+      unawaited(_drainIncomingShares());
+    }
+  }
+
+  Future<void> _drainIncomingShares() async {
+    _handlingShare = true;
+    try {
+      while (mounted && _pendingShareQueue.isNotEmpty) {
+        final batch = List<PlatformStagedFile>.from(_pendingShareQueue);
+        _pendingShareQueue.clear();
+        final paths = batch.map((e) => e.path).where((p) => p.isNotEmpty).toList();
+        if (paths.isEmpty) continue;
+        final targetLabel = _library.importTargetLabel;
+        if (!mounted) {
+          await _cleanupStagedFiles(paths);
+          return;
+        }
+        final confirmed = await showAppDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AppDialog(
+            title: '导入分享的文件？',
+            subtitle: '共 ${batch.length} 个文件，目标位置：$targetLabel',
+            icon: QIcons.library,
+            maxWidth: 460,
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('放弃'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('导入到书库'),
+              ),
+            ],
+            content: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final item in batch.take(6))
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Text(
+                      '• ${item.name}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(dialogContext).textTheme.bodySmall,
+                    ),
+                  ),
+                if (batch.length > 6)
+                  Text(
+                    '…另有 ${batch.length - 6} 个文件',
+                    style: Theme.of(dialogContext).textTheme.bodySmall,
+                  ),
+              ],
+            ),
+          ),
+        );
+        if (!mounted) {
+          await _cleanupStagedFiles(paths);
+          return;
+        }
+        if (confirmed == true) {
+          setState(() => _section = AppSection.library);
+          await _library.importPaths(paths);
+        }
+        await _cleanupStagedFiles(paths);
+      }
+    } finally {
+      _handlingShare = false;
+    }
+  }
+
+  Future<void> _cleanupStagedFiles(List<String> paths) async {
+    for (final path in paths) {
+      try {
+        final file = File(path);
+        if (await file.exists()) await file.delete();
+      } catch (_) {}
+    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    unawaited(_shareSub?.cancel());
     HardwareKeyboard.instance.removeHandler(_onGlobalKey);
     widget.controller.removeListener(_onStudyChanged);
     _schedule.removeListener(_onScheduleChanged);
@@ -626,44 +747,88 @@ class _StudyHomeState extends State<StudyHome> {
           });
         }
         final activeView = c.current != null
-            ? ReaderPage(
+            ? KeyedSubtree(
                 key: ValueKey('reader-${c.current!.id}'),
-                controller: c,
-                appearance: widget.appearance,
-                section: _section,
-                onNavigate: _navigate,
-                onBack: () => c.backToLibrary(),
-                onRequest: _request,
-                onJump: c.jumpToEvidence,
-                bookQa: _bookQa,
-                showRail: false,
-                showWindowChrome: widget.showWindowChrome,
-                openPanelOnStart: _openPanelOnStart,
-                onOpenOcrSettings: () => _openSettings(SettingsSection.ocr),
-                onOpenNoteInWorkspace: _openNoteFromReader,
+                child: ReaderPage(
+                  key: _readerKey,
+                  controller: c,
+                  appearance: widget.appearance,
+                  section: _section,
+                  onNavigate: _navigate,
+                  onBack: () => c.backToLibrary(),
+                  onRequest: _request,
+                  onJump: c.jumpToEvidence,
+                  bookQa: _bookQa,
+                  showRail: false,
+                  showWindowChrome: widget.showWindowChrome,
+                  openPanelOnStart: _openPanelOnStart,
+                  onOpenOcrSettings: () => _openSettings(SettingsSection.ocr),
+                  onOpenNoteInWorkspace: _openNoteFromReader,
+                ),
               )
             : KeyedSubtree(
                 key: const ValueKey('main-shell'),
                 child: _mainShell(context, width),
               );
-        return AnimatedSwitcher(
-          duration: context.motion(Motion.slow),
-          switchInCurve: Motion.curve,
-          switchOutCurve: Curves.easeIn,
-          layoutBuilder: (currentChild, previousChildren) => Stack(
-            fit: StackFit.expand,
-            children: [...previousChildren, ?currentChild],
-          ),
-          transitionBuilder: (child, animation) => FadeTransition(
-            opacity: animation,
-            child: ScaleTransition(
-              scale: Tween<double>(begin: 0.992, end: 1.0).animate(
-                CurvedAnimation(parent: animation, curve: Motion.curve),
-              ),
-              child: child,
+        final compactNotesOpen =
+            c.current == null &&
+            _section == AppSection.notes &&
+            width < 840 &&
+            _notes.selected != null;
+        final schedulePlanningOpen =
+            c.current == null &&
+            _section == AppSection.schedule &&
+            _schedule.planningOpen;
+        final canPopRoot =
+            c.current == null && !compactNotesOpen && !schedulePlanningOpen;
+        return PopScope(
+          canPop: canPopRoot,
+          onPopInvokedWithResult: (didPop, _) {
+            if (didPop) return;
+            if (c.current != null) {
+              if (_readerKey.currentState?.handleBackNavigation() ?? false) {
+                return;
+              }
+              if (c.sending) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('正在等待 AI 响应，请稍候或取消后再退出阅读。'),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+                return;
+              }
+              unawaited(c.backToLibrary());
+              return;
+            }
+            if (compactNotesOpen) {
+              _notes.flushNow();
+              _notes.closeSelected();
+              return;
+            }
+            if (schedulePlanningOpen) {
+              _schedule.closePlanningPanel();
+            }
+          },
+          child: AnimatedSwitcher(
+            duration: context.motion(Motion.slow),
+            switchInCurve: Motion.curve,
+            switchOutCurve: Curves.easeIn,
+            layoutBuilder: (currentChild, previousChildren) => Stack(
+              fit: StackFit.expand,
+              children: [...previousChildren, ?currentChild],
             ),
+            transitionBuilder: (child, animation) => FadeTransition(
+              opacity: animation,
+              child: ScaleTransition(
+                scale: Tween<double>(begin: 0.992, end: 1.0).animate(
+                  CurvedAnimation(parent: animation, curve: Motion.curve),
+                ),
+                child: child,
+              ),
+            ),
+            child: activeView,
           ),
-          child: activeView,
         );
       },
     ),
@@ -699,19 +864,16 @@ class _StudyHomeState extends State<StudyHome> {
         : null;
     final header = ownsHeader
         ? null
-        : MediaQuery.withClampedTextScaling(
-            maxScaleFactor: 1.35,
-            child: UnifiedHeader(
-              title: _section.label,
-              subtitle: subtitle,
-              sidebarCollapsed: _sidebarCollapsed,
-              onToggleSidebar: _toggleSidebar,
-              onOpenSettings: () => _openSettings(),
-              showSidebarToggle: docked,
-              showSubtitle: width >= 1000,
-              showWindowChrome: widget.showWindowChrome,
-              compact: compact,
-            ),
+        : UnifiedHeader(
+            title: _section.label,
+            subtitle: subtitle,
+            sidebarCollapsed: _sidebarCollapsed,
+            onToggleSidebar: _toggleSidebar,
+            onOpenSettings: () => _openSettings(),
+            showSidebarToggle: docked,
+            showSubtitle: width >= 1000,
+            showWindowChrome: widget.showWindowChrome,
+            compact: compact,
           );
     final sidebarOpen = docked && !_sidebarCollapsed;
     final content = Column(

@@ -181,14 +181,18 @@ class AppBadge extends StatelessWidget {
             QIcon(icon, size: IconSizes.sm, color: foreground),
             const SizedBox(width: 5),
           ],
-          Text(
-            label,
-            style: context.texts.bodySmall!.copyWith(
-              color: foreground,
-              fontSize: dense ? 12 : 12.5,
-              fontWeight: FontWeight.w600,
-              height: 1.3,
-              fontFeatures: AppNumerals.tabular,
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: context.texts.bodySmall!.copyWith(
+                color: foreground,
+                fontSize: dense ? 12 : 12.5,
+                fontWeight: FontWeight.w600,
+                height: 1.3,
+                fontFeatures: AppNumerals.tabular,
+              ),
             ),
           ),
         ],

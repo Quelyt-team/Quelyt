@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
@@ -11,6 +12,8 @@ import 'package:local_study/core/models.dart';
 import 'package:local_study/app_controller.dart';
 import 'package:local_study/features/library/library_controller.dart';
 import 'package:local_study/features/library/services/library_backup_service.dart';
+import 'package:local_study/features/review/data/review_repository.dart';
+import 'package:local_study/features/review/models/review_models.dart';
 import 'package:local_study/services/document_service.dart';
 import 'package:local_study/services/ocr_service.dart';
 
@@ -363,5 +366,64 @@ void main() {
       Directory(p.join(targetRoot, 'documents')).existsSync(),
       isFalse,
     );
+  });
+
+  test('zip backup bundles review_assets and rebases image_path on restore', () async {
+    await addRepresentativeContent();
+    final assetDir = Directory(
+      p.join(library.documents.directory.path, 'review_assets'),
+    )..createSync(recursive: true);
+    final assetFile = File(p.join(assetDir.path, 'diagram-1.png'))
+      ..writeAsBytesSync([0x89, 0x50, 0x4E, 0x47, 1, 2, 3]);
+    final reviewRepo = ReviewRepository(library.store);
+    reviewRepo.createItem(
+      id: 'rev-img-1',
+      kind: ReviewItemKind.occlusion,
+      prompt: '遮挡图中哪一部分表示熵变？',
+      imagePath: assetFile.path,
+    );
+
+    final zipPath = p.join(
+      temp.path,
+      'mobile-out',
+      'backup${LibraryBackupService.zipExtension}',
+    );
+    final report = await LibraryBackupService(
+      store: library.store,
+      documents: library.documents,
+    ).createZip(p.dirname(zipPath), fileName: p.basename(zipPath));
+    expect(report.isZip, isTrue);
+    expect(report.reviewAssets, 1);
+    expect(File(zipPath).existsSync(), isTrue);
+
+    final validation = await LibraryBackupService.validateZip(zipPath);
+    expect(validation.ok, isTrue, reason: validation.errors.join('；'));
+    expect(validation.reviewAssets, 1);
+
+    final targetRoot = p.join(temp.path, 'android-device-b');
+    await LibraryBackupService.prepareRestore(zipPath, targetRoot);
+    library.close();
+    final applied = await LibraryBackupService.applyPendingRestore(targetRoot);
+    expect(applied?.applied, isTrue, reason: applied?.error);
+
+    final restored = _Library(targetRoot);
+    addTearDown(restored.close);
+    final restoredItem = ReviewRepository(restored.store).getItem('rev-img-1');
+    expect(restoredItem, isNotNull);
+    final rebasedPath = restoredItem?.imagePath ?? '';
+    expect(p.isWithin(targetRoot, rebasedPath), isTrue);
+    expect(File(rebasedPath).existsSync(), isTrue);
+    expect(File(rebasedPath).readAsBytesSync(), [0x89, 0x50, 0x4E, 0x47, 1, 2, 3]);
+  });
+
+  test('validateZip rejects archives containing path traversal entries', () async {
+    final evilZip = File(p.join(temp.path, 'evil.zip'));
+    final archive = Archive()
+      ..addFile(ArchiveFile('../escape.txt', 4, utf8.encode('pwn!')));
+    evilZip.writeAsBytesSync(ZipEncoder().encode(archive));
+
+    final validation = await LibraryBackupService.validateZip(evilZip.path);
+    expect(validation.ok, isFalse);
+    expect(validation.errors.join('；'), contains('非法路径'));
   });
 }
