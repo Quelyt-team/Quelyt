@@ -23,6 +23,8 @@ import 'package:local_study/services/ai_transport.dart';
 import 'package:local_study/services/ai_types.dart';
 import 'package:local_study/services/document_service.dart';
 import 'package:local_study/services/ocr_service.dart';
+import 'package:path/path.dart' as p;
+import 'package:pdf/widgets.dart' as pw;
 import 'package:pdfrx/pdfrx.dart';
 
 import '../book_qa/book_fixture.dart';
@@ -54,8 +56,7 @@ void main() {
   test(
     'real four-page PDF sends the entire Batch B row and keeps valid citations',
     () async {
-      const path =
-          'docs/验收/evidence/w1-2026-11-18/Quelyt-W1-acceptance-20261118.pdf';
+      final path = await _createFourPageAcceptancePdf(temp);
       final doc = await documents.importFile(path, DocumentKind.textbook);
       final opened = await documents.open(doc);
       for (var i = 1; i <= doc.pageCount; i++) {
@@ -651,4 +652,61 @@ Uint8List _buildMinimalOle2Doc(String text) {
   out.setRange(sectorSize * 3, sectorSize * 3 + wordDoc.length, wordDoc);
   out.setRange(sectorSize * 11, sectorSize * 11 + table1.length, table1);
   return out;
+}
+
+Future<String> _createFourPageAcceptancePdf(Directory dir) async {
+  final fontBytes = File('assets/science/NotoSansSC-Regular.ttf')
+      .readAsBytesSync();
+  final font = pw.Font.ttf(fontBytes.buffer.asByteData());
+  final theme = pw.ThemeData.withFont(base: font, bold: font);
+  final doc = pw.Document(theme: theme);
+  doc.addPage(
+    pw.Page(
+      build: (_) => pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text('第一章 自由基聚合机理', style: const pw.TextStyle(fontSize: 18)),
+          pw.SizedBox(height: 12),
+          pw.Text(
+            '在自由基聚合中，乙烯基单体由于空间位阻与自由基共轭稳定效应，'
+            '链增长阶段主要发生头尾加成，因此聚合物多以头尾键连为主。',
+          ),
+        ],
+      ),
+    ),
+  );
+  doc.addPage(
+    pw.Page(
+      build: (_) => pw.Text(
+        'Chapter 2 Experimental setup and drying protocol for polymer batches.',
+      ),
+    ),
+  );
+  doc.addPage(
+    pw.Page(
+      build: (_) => pw.Text(
+        'Chapter 3 Calibration checks and moisture equilibrium verification.',
+      ),
+    ),
+  );
+  doc.addPage(
+    pw.Page(
+      build: (_) => pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(
+            'Table 4.1 Mean measured mass after drying',
+            style: const pw.TextStyle(fontSize: 16),
+          ),
+          pw.SizedBox(height: 10),
+          pw.Text('Batch A: 12.4 g | Mean measured mass after drying'),
+          pw.Text('Batch B: 15.0 g | Mean measured mass after drying'),
+          pw.Text('Batch C: 14.2 g | Mean measured mass after drying'),
+        ],
+      ),
+    ),
+  );
+  final file = File(p.join(dir.path, 'acceptance-four-page.pdf'));
+  await file.writeAsBytes(await doc.save(), flush: true);
+  return file.path;
 }
