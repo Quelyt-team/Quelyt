@@ -53,14 +53,28 @@ Future<bool> showBookQaPreview(
               message: '这次没有检索到直接匹配的教材原文；回答会明确标注教材依据的缺口。',
             )
           else
-            for (final source in request.bookSources.take(6)) ...[
+            for (final source in request.bookSources) ...[
               _Excerpt(source: source),
               const SizedBox(height: Space.sm),
             ],
-          if (request.bookSources.length > 6)
-            Text(
-              '另有 ${request.bookSources.length - 6} 段未在此展开，但仍会随请求发送。',
-              style: context.texts.bodySmall!.copyWith(fontSize: 12),
+          if (request.history.isNotEmpty ||
+              request.chapters.isNotEmpty ||
+              request.knowledge.isNotEmpty)
+            ExpansionTile(
+              title: const Text('发送的历史、章节和术语'),
+              children: [
+                for (final turn in request.history)
+                  ListTile(title: Text(turn.question), subtitle: SelectableText(turn.answer)),
+                for (final chapter in request.chapters.take(40))
+                  ListTile(title: Text(chapter.title), subtitle: Text(chapter.rangeLabel)),
+                for (final point in request.knowledge.take(24))
+                  ListTile(
+                    title: Text('${point.term} ${point.englishAlias} ${point.symbol}'),
+                    subtitle: SelectableText(point.definition.length <= 240
+                        ? point.definition
+                        : '${point.definition.substring(0, 240)}…'),
+                  ),
+              ],
             ),
           if (request.image != null) ...[
             const SizedBox(height: Space.lg),
@@ -535,9 +549,7 @@ class _Excerpt extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    final text = source.evidence.text.length <= 260
-        ? source.evidence.text
-        : '${source.evidence.text.substring(0, 260)}…';
+    final text = source.evidence.text;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(Space.md),

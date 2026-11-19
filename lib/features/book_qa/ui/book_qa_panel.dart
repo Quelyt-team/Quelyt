@@ -11,6 +11,10 @@ import '../../../services/document_service.dart';
 import '../../../ui/theme/tokens.dart';
 import '../../../ui/widgets/app_dialog.dart';
 import '../../../ui/widgets/app_surfaces.dart';
+import '../../notes/models/note_models.dart';
+import '../../notes/notes_controller.dart';
+import '../../notes/ui/answer_note_actions.dart';
+import '../../notes/ui/note_markdown_preview.dart';
 import '../../review/models/review_models.dart';
 import '../../review/ui/review_dialogs.dart';
 import '../book_qa_controller.dart';
@@ -26,11 +30,15 @@ class BookQaPanel extends StatefulWidget {
     required this.controller,
     required this.study,
     required this.onJump,
+    this.notes,
+    this.onOpenNote,
   });
 
   final BookQaController controller;
   final StudyController study;
   final Future<void> Function(Evidence evidence) onJump;
+  final NotesController? notes;
+  final ValueChanged<String>? onOpenNote;
 
   @override
   State<BookQaPanel> createState() => _BookQaPanelState();
@@ -38,7 +46,8 @@ class BookQaPanel extends StatefulWidget {
 
 class _BookQaPanelState extends State<BookQaPanel> {
   final _question = TextEditingController();
-  BookAskMode _mode = BookAskMode.wholeBookWeb;
+  late BookAskMode _mode = widget.study.current?.kind == DocumentKind.paper
+      ? BookAskMode.bookOnly : BookAskMode.wholeBookWeb;
   bool _preparing = false;
 
   BookQaController get q => widget.controller;
@@ -57,6 +66,16 @@ class _BookQaPanelState extends State<BookQaPanel> {
   Future<void> _send() async {
     final text = _question.text.trim();
     if (text.isEmpty || _preparing || q.asking) return;
+    final noteTitle = noteCommandTarget(text);
+    if (noteTitle != null) {
+      final answered = q.turns.where((turn) => turn.answer != null).lastOrNull;
+      if (answered == null) {
+        _message('当前对话还没有可以保存的回答。');
+      } else {
+        await _noteActions(answered, answered.answer!).append(context, query: noteTitle);
+      }
+      return;
+    }
     setState(() => _preparing = true);
     try {
       final prepared = await q.prepare(text, mode: _mode);
@@ -678,14 +697,9 @@ class _BookQaPanelState extends State<BookQaPanel> {
                 tone: BadgeTone.warm,
               ),
             ),
-          SelectableText(
-            block.text,
-            style: context.texts.bodyMedium!.copyWith(
-              fontSize: 14.5,
-              color: colors.ink,
-              height: 1.72,
-            ),
-          ),
+          NoteMarkdownPreview(text: block.markdown),
+          if (block.needsVerification)
+            Text('这段的部分出处需要核对', style: context.texts.bodySmall),
           if (block.bookCitationIds.isNotEmpty ||
               block.webCitationIds.isNotEmpty) ...[
             const SizedBox(height: 7),
@@ -697,7 +711,7 @@ class _BookQaPanelState extends State<BookQaPanel> {
                   if (_bookSource(answer, id) case final source?)
                     ActionChip(
                       avatar: const QIcon(QIcons.textbook, size: IconSizes.sm),
-                      label: Text('第 ${source.page} 页'),
+                      label: Text(_pageLabel(source.page)),
                       visualDensity: VisualDensity.compact,
                       onPressed: () => widget.onJump(source.evidence),
                     ),
@@ -759,8 +773,8 @@ class _BookQaPanelState extends State<BookQaPanel> {
                   ),
                   label: Text(
                     source.chapterTitle.isEmpty
-                        ? '第 ${source.page} 页'
-                        : '${source.chapterTitle} · 第 ${source.page} 页',
+                        ? _pageLabel(source.page)
+                        : '${source.chapterTitle} · ${_pageLabel(source.page)}',
                   ),
                   visualDensity: VisualDensity.compact,
                   onPressed: () => widget.onJump(source.evidence),
@@ -848,12 +862,53 @@ class _BookQaPanelState extends State<BookQaPanel> {
             ),
           ],
         ),
+        _noteActions(turn, answer),
         if (turn.cancelled)
           Text(
             '（这次问答被取消，但已返回的内容保留）',
             style: context.texts.bodySmall!.copyWith(fontSize: 11),
           ),
       ],
+    );
+  }
+
+  String _pageLabel(int page) => widget.study.current?.isSlides == true
+      ? '幻灯片 $page'
+      : '第 $page 页';
+
+  AnswerNoteActions _noteActions(BookQaTurn turn, BookQaAnswer answer) {
+    final doc = widget.study.current!;
+    final title = doc.title;
+    return AnswerNoteActions(
+      repository: widget.study.noteRepository,
+      notes: widget.notes,
+      onOpen: widget.onOpenNote,
+      draft: AnswerNoteDraft(
+        answerId: 'book:${answer.requestId}',
+        question: turn.question,
+        documentId: doc.id,
+        conversationSource: NoteSource(
+          id: '', noteId: '', documentId: doc.id, documentHash: doc.contentHash,
+          title: '打开原对话', sourceType: 'answer',
+          conversationId: q.conversation?.id,
+          createdAt: answer.createdAt,
+        ),
+        sections: [
+          for (final block in answer.blocks)
+            AnswerNoteSection(block.markdown, sources: [
+              for (final id in block.bookCitationIds)
+                if (_bookSource(answer, id) case final source?)
+                  noteEvidence(source.evidence.copyWith(locatorLabel: _pageLabel(source.page)), title: title),
+              for (final id in block.webCitationIds)
+                if (_webSource(answer, id) case final source?)
+                  NoteSource(
+                    id: '', noteId: '', title: source.title, excerpt: source.excerpt,
+                    sourceType: 'web', url: source.url,
+                    createdAt: source.fetchedAt,
+                  ),
+            ]),
+        ],
+      ),
     );
   }
 

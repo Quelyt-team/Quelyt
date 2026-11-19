@@ -1,0 +1,14 @@
+{
+  "name": "quelyt-mathjax-bundle",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild renderer.cjs --bundle --platform=neutral --format=iife --main-fields=main --target=es2020 --minify --legal-comments=eof --outfile=../../assets/science/mathjax.js"
+  },
+  "dependencies": {
+    "mathjax-full": "3.2.2"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12"
+  }
+}

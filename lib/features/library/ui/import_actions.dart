@@ -40,7 +40,8 @@ Future<void> pickAndImportFiles(
     final useStreamFallback = PlatformFileAccess.instance.isAndroid;
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
-      allowedExtensions: const ['pdf', 'png', 'jpg', 'jpeg'],
+      allowedExtensions: DocumentService.supportedExtensions
+          .map((extension) => extension.substring(1)).toList(),
       withData: false,
       withReadStream: useStreamFallback,
       allowMultiple: true,
@@ -146,7 +147,7 @@ Future<void> pickAndImportFolder(
           content: Text(
             scan.unsupported.isEmpty && scan.unreadable.isEmpty
                 ? '这个文件夹里没有可导入的文件。'
-                : '没有可导入的 PDF / JPG / PNG 文件'
+                : '没有可导入的学习资料'
                       '${scan.unsupported.isNotEmpty ? '（不支持 ${scan.unsupported.length} 个）' : ''}'
                       '${scan.unreadable.isNotEmpty ? '（无法读取 ${scan.unreadable.length} 项）' : ''}。',
           ),

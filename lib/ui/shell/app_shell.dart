@@ -210,7 +210,7 @@ class AppSidebar extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
             child: Divider(height: 1, color: c.outline),
           ),
-          _SidebarSettingsRow(onTap: onOpenSettings),
+          SidebarSettingsRow(onTap: onOpenSettings),
           const SizedBox(height: 6),
         ],
       ),
@@ -434,16 +434,21 @@ class _SidebarBrand extends StatelessWidget {
   }
 }
 
-class _SidebarSettingsRow extends StatefulWidget {
-  const _SidebarSettingsRow({required this.onTap});
+class SidebarSettingsRow extends StatefulWidget {
+  const SidebarSettingsRow({
+    super.key,
+    required this.onTap,
+    this.showShortcut = true,
+  });
 
   final VoidCallback onTap;
+  final bool showShortcut;
 
   @override
-  State<_SidebarSettingsRow> createState() => _SidebarSettingsRowState();
+  State<SidebarSettingsRow> createState() => _SidebarSettingsRowState();
 }
 
-class _SidebarSettingsRowState extends State<_SidebarSettingsRow> {
+class _SidebarSettingsRowState extends State<SidebarSettingsRow> {
   bool _hovered = false;
 
   @override
@@ -481,14 +486,15 @@ class _SidebarSettingsRowState extends State<_SidebarSettingsRow> {
                     ),
                   ),
                 ),
-                Text(
-                  'Ctrl+,',
-                  style: context.texts.labelSmall!.copyWith(
-                    fontSize: 11,
-                    letterSpacing: .1,
-                    color: c.inkMuted.withValues(alpha: .7),
+                if (widget.showShortcut)
+                  Text(
+                    'Ctrl+,',
+                    style: context.texts.labelSmall!.copyWith(
+                      fontSize: 11,
+                      letterSpacing: .1,
+                      color: c.inkMuted.withValues(alpha: .7),
+                    ),
                   ),
-                ),
               ],
             ),
           ),
@@ -532,6 +538,8 @@ class _RecentDocumentRowState extends State<_RecentDocumentRow> {
               switch (widget.document.kind) {
                 DocumentKind.textbook => QIcons.textbook,
                 DocumentKind.paper => QIcons.paper,
+                DocumentKind.exercise => QIcons.review,
+                DocumentKind.video => QIcons.study,
                 DocumentKind.unspecified => QIcons.study,
               },
               size: IconSizes.sm,
@@ -594,9 +602,18 @@ class UnifiedHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.colors;
     final sidebarOpen = showSidebarToggle && !sidebarCollapsed;
+    final hasWindowChrome =
+        showWindowChrome && AppChrome.isDesktopWindowChromeSupported && !compact;
     final buttonExtent = (compact || AdaptiveLayout.isTouchFirstPlatform)
         ? 44.0
         : 34.0;
+    final buttonDensity = buttonExtent >= 44
+        ? VisualDensity.standard
+        : VisualDensity.compact;
+    final showBrandOnLeft = !sidebarOpen && !(compact && leading != null);
+    final showSettingsOnRight = !sidebarOpen && onOpenSettings != null;
+    final hasRightTools =
+        search != null || importAction != null || trailing.isNotEmpty;
     return Container(
       constraints: BoxConstraints(
         minHeight: math.max(
@@ -610,13 +627,13 @@ class UnifiedHeader extends StatelessWidget {
       ),
       child: Row(
         children: [
-          if (!sidebarOpen)
+          if (showBrandOnLeft)
             Padding(
               padding: const EdgeInsets.only(left: 14),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  WindowDragRegion(
+                  const WindowDragRegion(
                     child: QuelytMark(
                       size: 22,
                       compact: true,
@@ -628,7 +645,7 @@ class UnifiedHeader extends StatelessWidget {
                     IconButton(
                       tooltip: '展开侧栏（Ctrl+B）',
                       onPressed: onToggleSidebar,
-                      visualDensity: VisualDensity.compact,
+                      visualDensity: buttonDensity,
                       constraints: BoxConstraints(
                         minWidth: buttonExtent,
                         minHeight: buttonExtent,
@@ -637,27 +654,13 @@ class UnifiedHeader extends StatelessWidget {
                       icon: const QIcon(QIcons.sidebar, size: IconSizes.md),
                     ),
                   ],
-                  if (onOpenSettings != null) ...[
-                    const SizedBox(width: 2),
-                    IconButton(
-                      tooltip: '设置（Ctrl+,）',
-                      onPressed: onOpenSettings,
-                      visualDensity: VisualDensity.compact,
-                      constraints: BoxConstraints(
-                        minWidth: buttonExtent,
-                        minHeight: buttonExtent,
-                      ),
-                      padding: EdgeInsets.zero,
-                      icon: const QIcon(QIcons.settings, size: IconSizes.md),
-                    ),
-                  ],
                 ],
               ),
             ),
           if (leading != null)
             Padding(
               padding: EdgeInsets.only(
-                left: !sidebarOpen ? 2 : (compact ? 8 : 14),
+                left: showBrandOnLeft ? 4 : (compact ? 8 : 14),
               ),
               child: leading!,
             ),
@@ -680,7 +683,7 @@ class UnifiedHeader extends StatelessWidget {
                 : WindowDragRegion(
                     child: Padding(
                       padding: EdgeInsets.symmetric(
-                        horizontal: compact ? 14 : 24,
+                        horizontal: compact ? 12 : 24,
                       ),
                       child: Row(
                         children: [
@@ -722,15 +725,46 @@ class UnifiedHeader extends StatelessWidget {
             Padding(padding: const EdgeInsets.only(right: 10), child: search!),
           if (importAction != null)
             Padding(
-              padding: EdgeInsets.only(right: showWindowChrome ? 10 : 16),
+              padding: EdgeInsets.only(
+                right: (trailing.isNotEmpty || showSettingsOnRight)
+                    ? 8
+                    : (hasWindowChrome ? 10 : 16),
+              ),
               child: importAction!,
             ),
           if (trailing.isNotEmpty)
             Padding(
-              padding: EdgeInsets.only(right: showWindowChrome ? 8 : 14),
+              padding: EdgeInsets.only(
+                right: showSettingsOnRight ? 2 : (hasWindowChrome ? 8 : 14),
+              ),
               child: Row(mainAxisSize: MainAxisSize.min, children: trailing),
             ),
-          if (showWindowChrome) const WindowCaptionControls(),
+          if (showSettingsOnRight) ...[
+            if (hasRightTools)
+              Container(
+                width: 1,
+                height: 16,
+                margin: const EdgeInsets.symmetric(horizontal: 4),
+                color: c.outline,
+              ),
+            Padding(
+              padding: EdgeInsets.only(
+                right: hasWindowChrome ? 6 : (compact ? 8 : 12),
+              ),
+              child: IconButton(
+                tooltip: '设置（Ctrl+,）',
+                onPressed: onOpenSettings,
+                visualDensity: buttonDensity,
+                constraints: BoxConstraints(
+                  minWidth: buttonExtent,
+                  minHeight: buttonExtent,
+                ),
+                padding: EdgeInsets.zero,
+                icon: const QIcon(QIcons.settings, size: IconSizes.md),
+              ),
+            ),
+          ],
+          if (hasWindowChrome) const WindowCaptionControls(),
         ],
       ),
     );

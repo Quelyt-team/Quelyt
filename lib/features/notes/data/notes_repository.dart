@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/local_store.dart';
@@ -300,6 +301,82 @@ class NotesRepository {
   // Create / save
   // ---------------------------------------------------------------------------
 
+  T _write<T>(T Function() action) =>
+      store.inTransaction ? action() : store.transact(action);
+
+  NoteRecord saveAnswer(
+    AnswerNoteDraft draft, {
+    Set<int>? selected,
+    String? targetNoteId,
+    int? expectedRevision,
+    String? operationKey,
+  }) {
+    final sections = [
+      for (var i = 0; i < draft.sections.length; i++)
+        if (selected == null || selected.contains(i)) draft.sections[i],
+    ];
+    if (sections.isEmpty) throw const NotesException('请至少选一段回答。');
+    final selectionKey = sha256.convert(utf8.encode(jsonEncode([
+      operationKey ?? draft.answerId,
+      selected == null ? List.generate(draft.sections.length, (i) => i)
+          : (selected.toList()..sort()),
+      if (operationKey == null) sections.map((section) => section.markdown).toList(),
+    ]))).toString();
+    final targetKey = targetNoteId ?? '';
+    final body = [
+      '## ${draft.label}',
+      '**原问题** ${draft.question}',
+      ...sections.map((section) => section.markdown),
+    ].join('\n\n');
+    final sourceList = [
+      ?draft.conversationSource,
+      for (final section in sections) ...section.sources,
+    ];
+    return _write(() {
+      final existing = store.selectRows(
+        'SELECT note_id FROM answer_note_saves WHERE selection_key=? AND target_key=?',
+        [selectionKey, targetKey],
+      );
+      if (existing.isNotEmpty) {
+        final note = getNote(existing.single['note_id'] as String);
+        if (note != null && !note.isTrashed) return note;
+        throw const NotesException('这份回答已保存到回收站中的笔记，请先恢复该笔记。');
+      }
+      final NoteRecord written;
+      if (targetNoteId == null) {
+        written = create(
+          title: draft.question,
+          body: body,
+          folderId: folderForDocument(draft.documentId),
+        );
+      } else {
+        final target = getNote(targetNoteId);
+        if (target == null || target.isTrashed) {
+          throw const NotesException('目标笔记已移除，请重新选择。');
+        }
+        written = save(
+          target.copyWith(body: target.body.isEmpty
+              ? body : '${target.body}\n\n---\n\n$body'),
+          reason: 'append-answer',
+          forceRevision: true,
+          expectedRevision: expectedRevision,
+        );
+      }
+      String key(NoteSource source) => jsonEncode([
+        source.documentId, source.documentHash, source.page, source.timeMs,
+        source.region.toJson(), source.url, source.conversationId, source.excerpt,
+      ]);
+      final known = sources(written.id).map(key).toSet();
+      for (final source in sourceList) {
+        if (known.add(key(source))) addSource(source.forNote(written.id, ''));
+      }
+      store.executeSql('INSERT INTO answer_note_saves VALUES (?,?,?)', [
+        selectionKey, targetKey, written.id,
+      ]);
+      return written;
+    });
+  }
+
   NoteRecord create({
     String title = '',
     String body = '',
@@ -316,24 +393,11 @@ class NotesRepository {
       createdAt: now,
       updatedAt: now,
     );
-    return store.transact(() {
+    return _write(() {
       _insertNote(note);
       _insertPrimaryEntry(id, folderId, now);
       for (final source in sources) {
-        addSource(
-          NoteSource(
-            id: source.id.isEmpty ? _uuid.v4() : source.id,
-            noteId: id,
-            documentId: source.documentId,
-            documentHash: source.documentHash,
-            page: source.page,
-            region: source.region,
-            excerpt: source.excerpt,
-            sourceType: source.sourceType,
-            title: source.title,
-            createdAt: source.createdAt,
-          ),
-        );
+        addSource(source.forNote(id, source.id));
       }
       for (final question in questions) {
         addQuestion(
@@ -372,7 +436,7 @@ class NotesRepository {
       revision: revision,
       updatedAt: changed || forceRevision ? now : note.updatedAt,
     );
-    return store.transact(() {
+    return _write(() {
       if (changed) {
         final latest = store.selectRows(
           'SELECT created_at FROM note_revisions WHERE note_id = ? '
@@ -544,18 +608,7 @@ class NotesRepository {
 
   NoteSource addSource(NoteSource source) {
     final id = source.id.isEmpty ? _uuid.v4() : source.id;
-    final value = NoteSource(
-      id: id,
-      noteId: source.noteId,
-      documentId: source.documentId,
-      documentHash: source.documentHash,
-      page: source.page,
-      region: source.region,
-      excerpt: source.excerpt,
-      sourceType: source.sourceType,
-      title: source.title,
-      createdAt: source.createdAt,
-    );
+    final value = source.forNote(source.noteId, id);
     store.executeSql(
       '''INSERT INTO note_sources
         (id, note_id, document_id, document_hash, page, region, excerpt,

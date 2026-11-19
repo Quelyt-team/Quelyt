@@ -31,6 +31,7 @@ class PreparedBookQaRequest {
     required this.documentId,
     required this.documentHash,
     required this.documentTitle,
+    required this.documentKind,
     required this.conversationId,
     required this.question,
     required this.mode,
@@ -59,6 +60,7 @@ class PreparedBookQaRequest {
   final String documentId;
   final String documentHash;
   final String documentTitle;
+  final DocumentKind documentKind;
   final String conversationId;
   final String question;
   final BookAskMode mode;
@@ -148,7 +150,7 @@ class BookQaClient {
   static const int maxQuestionCharacters = 2000;
   static const int maxBlocks = 10;
   static const int maxBlockCharacters = 4000;
-  static const int maxHistoryTurns = 6;
+  static const int maxHistoryTurns = 2;
   static const int maxHistoryCharacters = 8000;
   static const int maxWebSources = 4;
   static const int maxWebExcerptCharacters = 1800;
@@ -166,7 +168,7 @@ class BookQaClient {
     required bool webEnabled,
     ImageAttachment? image,
   }) {
-    final model = (image == null ? settings.model : settings.visionModel)
+    final model = (image == null ? settings.model : settings.effectiveVisionModel)
         .trim();
     if (model.isEmpty) {
       throw AiFailure(
@@ -202,7 +204,8 @@ class BookQaClient {
     }
     final boundedHistory = <BookQaHistoryTurn>[];
     var historyCharacters = 0;
-    for (final turn in history.reversed) {
+    for (final turn in mode == BookAskMode.currentPage
+        ? const <BookQaHistoryTurn>[] : history.reversed) {
       final length = turn.question.length + turn.answer.length;
       if (boundedHistory.length >= maxHistoryTurns ||
           historyCharacters + length > maxHistoryCharacters) {
@@ -219,12 +222,13 @@ class BookQaClient {
       documentId: document.id,
       documentHash: document.contentHash,
       documentTitle: document.title,
+      documentKind: document.kind,
       conversationId: conversationId,
       question: trimmed,
       mode: mode,
       strictAuthor: strictAuthor,
       bookSources: bookSources,
-      chapters: retrieval.hitChapters,
+      chapters: mode == BookAskMode.currentPage ? const [] : retrieval.hitChapters,
       knowledge: retrieval.matchedKnowledge,
       coverage: retrieval.coverage(),
       searchQueries: webOn ? searchQueries.take(2).toList() : const [],
@@ -286,6 +290,8 @@ class BookQaClient {
   ) {
     final userJson = jsonEncode({
       'task': 'bookQuestion',
+      'template_version': 'study-answer-2',
+      'material_kind': request.documentKind.name,
       'question': request.question,
       'mode': request.mode.name,
       'book': {
@@ -371,12 +377,17 @@ class BookQaClient {
           'role': 'system',
           'content': request.strictAuthor
               ? _authorVerificationPrompt
+              : request.documentKind == DocumentKind.paper
+              ? '以论文为研究材料。区分作者结论、读者推断与外部研究。\n$_bookQuestionPrompt'
               : _bookQuestionPrompt,
         },
         {'role': 'user', 'content': userContent},
       ],
       'stream': false,
-      'max_tokens': maxOutputTokens,
+      'max_tokens': request.image != null ||
+              RegExp(r'推导|证明|分步|计算|对比|详细').hasMatch(request.question)
+          ? maxOutputTokens
+          : 1200,
       if (image == null) 'response_format': {'type': 'json_object'},
       if (image == null && request.settings.endpoint.host == 'api.deepseek.com')
         'thinking': {'type': 'disabled'},
@@ -440,7 +451,9 @@ class BookQaClient {
     if (!allowed.containsAll(json.keys)) {
       throw const AiFailure(AiError.invalidResponse, '教材问答结果包含未允许的字段。');
     }
-    final status = answerStatusFromName(json['answerStatus'] as String?);
+    final status = answerStatusFromName(
+      json['answerStatus'] is String ? json['answerStatus'] as String : null,
+    );
     final rawBlocks = json['blocks'];
     if (rawBlocks is! List ||
         rawBlocks.isEmpty ||
@@ -449,7 +462,8 @@ class BookQaClient {
     }
     final allowedBook = request.bookSources.map((source) => source.id).toSet();
     final allowedWeb = {
-      for (var index = 0; index < webSources.length; index++) 'W${index + 1}',
+      for (var index = 0; index < webSources.length; index++)
+        if (webSources[index].fullText) 'W${index + 1}',
     };
     final rejected = <String>{};
     final blocks = <BookAnswerBlock>[];
@@ -463,44 +477,69 @@ class BookQaClient {
         'bookCitations',
         'webCitations',
         'supplemental',
+        'kind',
+        'latex',
       };
       if (!blockKeys.containsAll(block.keys)) {
         throw const AiFailure(AiError.invalidResponse, '回答段落包含未允许的字段。');
       }
-      final text = block['text'];
-      if (text is! String ||
-          text.trim().isEmpty ||
-          text.length > maxBlockCharacters) {
+      final candidateKind = AnswerBlockKind.values.asNameMap()[block['kind']];
+      final kind = candidateKind ?? AnswerBlockKind.paragraph;
+      final rawLatex = block['latex'];
+      final latex = (kind == AnswerBlockKind.math || kind == AnswerBlockKind.chem) &&
+              rawLatex is String &&
+              rawLatex.trim().isNotEmpty &&
+              rawLatex.length <= maxBlockCharacters
+          ? rawLatex.trim()
+          : null;
+      final rawText = block['text'];
+      final text = rawText is String && rawText.trim().isNotEmpty
+          ? rawText.trim()
+          : latex;
+      if (text == null || text.length > maxBlockCharacters) {
         throw const AiFailure(AiError.invalidResponse, '回答段落为空或过长。');
       }
+      var needsVerification = false;
       List<String> citations(String key) {
         final rawList = block[key];
         if (rawList == null) return const [];
-        if (rawList is! List || rawList.length > 8) {
-          throw const AiFailure(AiError.invalidResponse, '引用编号列表格式不正确。');
-        }
+        final candidates = rawList is List ? rawList : [rawList];
         final result = <String>[];
-        for (final item in rawList) {
+        final ids = key == 'bookCitations' ? allowedBook : allowedWeb;
+        for (final item in candidates.take(64)) {
           if (item is! String) {
-            throw const AiFailure(AiError.invalidResponse, '引用编号格式不正确。');
+            needsVerification = true;
+            rejected.add('引用格式异常');
+            continue;
           }
-          if (key == 'bookCitations'
-              ? allowedBook.contains(item)
-              : allowedWeb.contains(item)) {
-            if (!result.contains(item)) result.add(item);
-          } else {
-            rejected.add(item);
+          for (final part in item.trim().split(RegExp(r'[\s,，、;；]+')).take(24)) {
+            final normalized = part.toUpperCase();
+            if (ids.contains(normalized)) {
+              if (!result.contains(normalized)) result.add(normalized);
+            } else if (part.isNotEmpty) {
+              needsVerification = true;
+              rejected.add(part.length <= 36 ? part : '引用格式异常');
+            }
           }
+        }
+        if (candidates.length > 64) {
+          needsVerification = true;
+          rejected.add('部分引用超出检查范围');
         }
         return result;
       }
 
+      final bookIds = citations('bookCitations');
+      final webIds = citations('webCitations');
       blocks.add(
         BookAnswerBlock(
-          text: text.trim(),
-          bookCitationIds: citations('bookCitations'),
-          webCitationIds: citations('webCitations'),
-          supplemental: block['supplemental'] as bool? ?? false,
+          text: text,
+          kind: kind,
+          latex: latex,
+          bookCitationIds: bookIds,
+          webCitationIds: webIds,
+          supplemental: block['supplemental'] == true,
+          needsVerification: needsVerification,
         ),
       );
     }
@@ -590,6 +629,9 @@ class BookQaClient {
 9. 如果本次附带教材原页图片，可以解读图中可见的结构、符号和数值；说明依据是本次图片，不要编造图中没有的数值、结构或图例。
 回答要求：先给结论，再给条件、机理或例子；blocks 按讲解顺序分段，每段可独立阅读。supplemental=true 表示你的解释或补充判断，不是教材原文结论。
 web_lookup 是客户端记录的真实联网状态，不要自行声称联网成功，也不要编造搜索来源。
+定量题直接给出原值与单位，保留有效数字，依据完整表行与表头。解释原因时先界定材料的对象与适用条件。
+网页引用只使用已读取正文、且真正支持本段主张的 W 编号。仅有摘要时可写课外背景并标 supplemental，勿为该摘要绑定 W 引用。
+公式块可返回 {"kind":"math","latex":"原始 TeX","bookCitations":["B1"]}，化学式使用 kind="chem" 与 mhchem。普通段落、步骤及表格可在 text 中用 Markdown。请用标准 JSON 转义反斜杠。
 返回且只返回一个 JSON 对象：
 {"answerStatus":"answered|partial|needsClarification","blocks":[{"text":"回答段落","bookCitations":["B1"],"webCitations":["W1"],"supplemental":false}],"bookCoverage":{"scope":"你实际依据的教材范围","matchedChapters":["章节名"],"gaps":["仍未覆盖的部分"]},"missingInformation":["真正影响回答的未知条件"]}
 blocks 最多10段，每段不超过2000字。不要输出 Markdown 代码围栏。''';

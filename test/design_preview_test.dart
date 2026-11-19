@@ -311,11 +311,11 @@ void main() {
     await pumpApp(tester, dark: false, showWindowChrome: true);
     await capture(tester, '31-reader-desktop-caption');
 
-    await tester.tap(find.text('笔记').first);
+    await tester.tap(find.byKey(const ValueKey('learning-dock-2')));
     await tester.pumpAndSettle();
     await capture(tester, '32-reader-notes');
 
-    await tester.tap(find.text('问答').first);
+    await tester.tap(find.byKey(const ValueKey('learning-dock-1')));
     await tester.pumpAndSettle();
     await capture(tester, '33-reader-questions');
 
@@ -480,7 +480,7 @@ void main() {
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('笔记'));
+    await tester.tap(find.byKey(const ValueKey('learning-dock-2')));
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('新建笔记'));
     await tester.pumpAndSettle();

@@ -25,7 +25,7 @@ class LocalStore {
 
   factory LocalStore.inMemory() => LocalStore._(sqlite3.openInMemory());
 
-  static const int currentSchemaVersion = 10;
+  static const int currentSchemaVersion = 11;
 
   final Database _database;
   final String? _path;
@@ -108,6 +108,14 @@ class LocalStore {
     if (version == 9) {
       _migrateToVersion10(backup: !fresh);
       version = 10;
+    }
+    if (version == 10) {
+      if (!fresh) _backupBeforeMigration(fromVersion: 10);
+      _transaction(() {
+        _database.execute(schemaVersion11);
+        _setVersion(11);
+      });
+      version = 11;
     }
     assert(version == currentSchemaVersion);
   }
@@ -1119,7 +1127,7 @@ class LocalStore {
   /// material reference is marked missing so a deleted document cannot become
   /// a silently broken "open textbook" action.
   void deleteDocument(String id) {
-    _transaction(() {
+    _atomic(() {
       final linked = _database.select(
         'SELECT id, data FROM study_tasks WHERE material_document_id = ?',
         [id],
@@ -1142,7 +1150,7 @@ class LocalStore {
   }
 
   void importDocument(DocumentRecord document, Iterable<PageRecord> pages) {
-    _transaction(() {
+    _atomic(() {
       upsertDocument(document);
       for (final page in pages) {
         if (page.documentId != document.id) {
@@ -1245,7 +1253,7 @@ class LocalStore {
   }
 
   void saveEvidence(Evidence evidence) =>
-      _transaction(() => _writeEvidence(evidence));
+      _atomic(() => _writeEvidence(evidence));
 
   /// Atomically replaces automatically extracted spans on one page. Manual
   /// source annotations remain attached to their original coordinates.
@@ -1255,7 +1263,7 @@ class LocalStore {
     List<Evidence> evidence, {
     bool preserveManual = true,
   }) {
-    _transaction(
+    _atomic(
       () => _replacePageEvidence(
         documentId,
         page,
@@ -1270,7 +1278,7 @@ class LocalStore {
     List<Evidence> evidence, {
     bool preserveManual = true,
   }) {
-    _transaction(() {
+    _atomic(() {
       _replacePageEvidence(
         page.documentId,
         page.page,
@@ -1295,7 +1303,8 @@ class LocalStore {
     }
     _database.execute(
       '''
-        DELETE FROM evidence WHERE document_id = ? AND page = ?
+      DELETE FROM evidence WHERE document_id = ? AND page = ? AND origin != 'vision'
+        AND instr(evidence_id, ':material-edit:') = 0
         ${preserveManual ? "AND origin != 'manual'" : ''}
       ''',
       [documentId, page],

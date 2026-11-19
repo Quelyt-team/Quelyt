@@ -113,8 +113,8 @@ void main() {
 
     final store = LocalStore.open(directory.path);
     addTearDown(store.dispose);
-    expect(store.schemaVersion, 10);
-    expect(store.backupPaths, hasLength(9));
+    expect(store.schemaVersion, 11);
+    expect(store.backupPaths, hasLength(10));
     expect(File(store.backupPaths.first).existsSync(), isTrue);
     expect(File(store.backupPaths.last).existsSync(), isTrue);
     final v1Backup = sqlite3.open(
@@ -128,15 +128,15 @@ void main() {
       reason: 'the first backup must be the untouched v1 database',
     );
     v1Backup.close();
-    final v9Backup = sqlite3.open(
+    final v10Backup = sqlite3.open(
       store.backupPaths.last,
       mode: OpenMode.readOnly,
     );
-    addTearDown(v9Backup.close);
+    addTearDown(v10Backup.close);
     expect(
-      v9Backup.select('PRAGMA user_version').first.values.first,
-      9,
-      reason: 'the last backup must be the v9 database before review tables',
+      v10Backup.select('PRAGMA user_version').first.values.first,
+      10,
+      reason: 'the last backup must be the v10 database before material tables',
     );
 
     expect(store.getDocument('book')!.currentPage, 21);
@@ -159,7 +159,7 @@ void main() {
 
     final reopened = LocalStore.open(directory.path);
     addTearDown(reopened.dispose);
-    expect(reopened.schemaVersion, 10);
+    expect(reopened.schemaVersion, 11);
     expect(reopened.backupPaths, isEmpty);
     expect(reopened.getDocument('book')!.contentHash, 'hash-v1');
     expect(ScheduleRepository(reopened).getPlan('plan')!.title, '期中数学');
@@ -175,10 +175,10 @@ void main() {
 
     final store = LocalStore.open(directory.path);
     addTearDown(store.dispose);
-    expect(store.schemaVersion, 10);
-    expect(store.backupPaths, hasLength(8));
+    expect(store.schemaVersion, 11);
+    expect(store.backupPaths, hasLength(9));
     expect(store.backupPaths.first, contains('.v2-backup-'));
-    expect(store.backupPaths.last, contains('.v9-backup-'));
+    expect(store.backupPaths.last, contains('.v10-backup-'));
     final backup = sqlite3.open(
       store.backupPaths.first,
       mode: OpenMode.readOnly,
@@ -213,10 +213,10 @@ void main() {
 
     final store = LocalStore.open(directory.path);
     addTearDown(store.dispose);
-    expect(store.schemaVersion, 10);
-    expect(store.backupPaths, hasLength(7));
+    expect(store.schemaVersion, 11);
+    expect(store.backupPaths, hasLength(8));
     expect(store.backupPaths.first, contains('.v3-backup-'));
-    expect(store.backupPaths.last, contains('.v9-backup-'));
+    expect(store.backupPaths.last, contains('.v10-backup-'));
     final backup = sqlite3.open(
       store.backupPaths.first,
       mode: OpenMode.readOnly,
@@ -319,10 +319,10 @@ void main() {
 
     final store = LocalStore.open(directory.path);
     addTearDown(store.dispose);
-    expect(store.schemaVersion, 10);
-    expect(store.backupPaths, hasLength(6));
+    expect(store.schemaVersion, 11);
+    expect(store.backupPaths, hasLength(7));
     expect(store.backupPaths.first, contains('.v4-backup-'));
-    expect(store.backupPaths.last, contains('.v9-backup-'));
+    expect(store.backupPaths.last, contains('.v10-backup-'));
     final backup = sqlite3.open(
       store.backupPaths.first,
       mode: OpenMode.readOnly,
@@ -373,10 +373,10 @@ void main() {
 
     final store = LocalStore.open(directory.path);
     addTearDown(store.dispose);
-    expect(store.schemaVersion, 10);
-    expect(store.backupPaths, hasLength(5));
+    expect(store.schemaVersion, 11);
+    expect(store.backupPaths, hasLength(6));
     expect(store.backupPaths.first, contains('.v5-backup-'));
-    expect(store.backupPaths.last, contains('.v9-backup-'));
+    expect(store.backupPaths.last, contains('.v10-backup-'));
     expect(store.getDocument('book')!.contentHash, 'hash-v1');
   });
 
@@ -390,10 +390,10 @@ void main() {
 
     final store = LocalStore.open(directory.path);
     addTearDown(store.dispose);
-    expect(store.schemaVersion, 10);
-    expect(store.backupPaths, hasLength(4));
+    expect(store.schemaVersion, 11);
+    expect(store.backupPaths, hasLength(5));
     expect(store.backupPaths.first, contains('.v6-backup-'));
-    expect(store.backupPaths.last, contains('.v9-backup-'));
+    expect(store.backupPaths.last, contains('.v10-backup-'));
     final backup = sqlite3.open(
       store.backupPaths.first,
       mode: OpenMode.readOnly,
@@ -464,9 +464,9 @@ void main() {
 
     final store = LocalStore.open(directory.path);
     addTearDown(store.dispose);
-    expect(store.schemaVersion, 10);
-    expect(store.backupPaths, hasLength(3));
-    expect(store.backupPaths.last, contains('.v9-backup-'));
+    expect(store.schemaVersion, 11);
+    expect(store.backupPaths, hasLength(4));
+    expect(store.backupPaths.last, contains('.v10-backup-'));
     final document = store.getDocument('book')!;
     expect(document.contentHash, 'hash-v1');
     expect(document.kind, DocumentKind.textbook);

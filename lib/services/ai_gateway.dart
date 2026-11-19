@@ -215,6 +215,33 @@ class AiGateway {
   Future<String> testConnection(ProviderSettings settings) =>
       transport.testConnection(settings);
 
+  Future<void> testVision(ProviderSettings settings, ImageAttachment image) async {
+    final model = settings.effectiveVisionModel;
+    if (model.isEmpty) throw const AiFailure(AiError.invalidSettings, '请填写支持图片的模型。');
+    final result = await transport.postJson(
+      settings: settings, endpoint: settings.endpoint,
+      payloadJson: jsonEncode({
+        'model': model,
+        'stream': false, 'max_tokens': 128,
+        if (settings.endpoint.host == 'api.deepseek.com') 'thinking': {'type': 'disabled'},
+        'messages': [
+          {'role': 'user', 'content': [
+            {'type': 'text', 'text': 'What color is the solid test square? Reply with one English color word.'},
+            {'type': 'image_url', 'image_url': {'url': 'data:${image.mimeType};base64,${base64Encode(image.bytes)}'}},
+          ]},
+        ],
+      }),
+    );
+    final data = jsonDecode(result.body);
+    final choices = data is Map ? data['choices'] : null;
+    final choice = choices is List ? choices.firstOrNull : null;
+    final message = choice is Map ? choice['message'] : null;
+    final content = message is Map ? message['content'] : null;
+    if (content is! String || !RegExp(r'\bblue\b|蓝', caseSensitive: false).hasMatch(content)) {
+      throw const AiFailure(AiError.invalidResponse, '模型没有读出测试图颜色。请核对该模型支持图片输入。');
+    }
+  }
+
   /// Preparing requests is local and never reads a key or opens a connection.
   /// We reject oversize context rather than silently change the send preview.
   PreparedAiRequest prepare({
@@ -229,7 +256,7 @@ class AiGateway {
     int maxOutputTokens = 1600,
   }) {
     final endpoint = settings.endpoint;
-    final model = (image == null ? settings.model : settings.visionModel)
+    final model = (image == null ? settings.model : settings.effectiveVisionModel)
         .trim();
     if (model.isEmpty) {
       throw AiFailure(

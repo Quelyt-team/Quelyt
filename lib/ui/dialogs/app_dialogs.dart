@@ -414,6 +414,7 @@ class _SearchResultTileState extends State<_SearchResultTile> {
     final c = context.colors;
     final origin = switch (widget.result.origin) {
       EvidenceOrigin.ocr => '识别文字',
+      EvidenceOrigin.vision => 'AI 识别',
       EvidenceOrigin.manual => '人工校正',
       EvidenceOrigin.text => '原文字层',
     };

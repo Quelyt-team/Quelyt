@@ -11,6 +11,11 @@ import 'package:uuid/uuid.dart';
 
 import '../core/local_store.dart';
 import '../core/models.dart';
+import '../core/page_evidence_layout.dart';
+import '../features/materials/material_classification.dart';
+import '../features/materials/slides/slide_converter.dart';
+import '../features/materials/word/word_converter.dart';
+import 'free_space.dart';
 import 'ocr_service.dart';
 
 class RenderedPage {
@@ -162,7 +167,10 @@ class DocumentService {
 
   String _pageKey(String documentId, int page) => '$documentId:$page';
 
-  static const supportedExtensions = {'.pdf', '.jpg', '.jpeg', '.png'};
+  static final supportedExtensions = Set<String>.unmodifiable(
+    MaterialFormatX.extensions.keys.map((extension) => '.$extension'),
+  );
+  static const supportedFormatsLabel = 'PDF、Word、图片、PPT/PPTX、MP4/WebM/MKV';
 
   static bool isSupportedPath(String path) =>
       supportedExtensions.contains(p.extension(path).toLowerCase());
@@ -191,10 +199,11 @@ class DocumentService {
     }
     final extension = p.extension(sourcePath).toLowerCase();
     if (!supportedExtensions.contains(extension)) {
-      throw FormatException('暂不支持 $extension 格式，支持 PDF、JPG 和 PNG。');
+      throw FormatException('暂不支持 $extension 格式。可导入 $supportedFormatsLabel。');
     }
     final total = await source.length();
     if (total <= 0) throw const FormatException('文件是空的，没有导入。');
+    await LocalDiskSpace.require(directory, total + 8 * 1024 * 1024, '导入这份资料');
     final staging = _managedDirectory('imports', batchId ?? 'inbox');
     await staging.create(recursive: true);
     final temp = File(p.join(staging.path, '${_uuid.v4()}$extension.part'));
@@ -272,11 +281,14 @@ class DocumentService {
     StagedImport staged, {
     String? title,
     DocumentKind kind = DocumentKind.unspecified,
+    void Function(ImportCommit)? register,
   }) async {
     final existing = store.findDocumentByHash(staged.digest);
     if (existing != null) {
       await _deleteStaged(staged.stagedPath);
-      return ImportCommit(record: existing, duplicate: true);
+      final commit = ImportCommit(record: existing, duplicate: true);
+      if (register != null) store.transact(() => register(commit));
+      return commit;
     }
     final id = _uuid.v4();
     final targetDirectory = _managedDirectory('documents', id);
@@ -293,13 +305,64 @@ class DocumentService {
         await File(staged.stagedPath).delete();
       }
       var pageCount = 1;
-      if (staged.extension == '.pdf') {
+      final format = MaterialFormatX.parse(staged.extension.substring(1));
+      var firstPageText = '';
+      DocumentKind? suggested;
+      String? conversionIssue;
+      String? slideRenderer;
+      if (format == MaterialFormat.pdf) {
         pdf = await PdfDocument.openFile(target.path);
         pageCount = pdf.pages.length;
         if (pageCount == 0) {
           throw const FormatException('PDF 没有可读取的页面。');
         }
-      } else {
+        try {
+          firstPageText = (await pdf.pages.first.loadStructuredText()).fullText;
+          if (kind == DocumentKind.unspecified) suggested = suggestPageMode(firstPageText);
+        } catch (_) {
+          // OCR can supply a suggestion later.
+        }
+      } else if (format == MaterialFormat.slides) {
+        final preview = File(p.join(targetDirectory.path, SlideConverter.previewName));
+        try {
+          final result = await const SlideConverter().convert(target, preview);
+          pdf = await PdfDocument.openFile(preview.path);
+          pageCount = pdf.pages.length;
+          if (pageCount <= 0) throw const FormatException('没有可读的幻灯片。');
+          slideRenderer = result.renderer;
+          conversionIssue = result.notice;
+        } catch (error) {
+          await pdf?.dispose();
+          pdf = null;
+          if (await preview.exists()) await preview.delete();
+          pageCount = 1;
+          conversionIssue = '课件转换未完成：$error';
+        }
+      } else if (format == MaterialFormat.word) {
+        final preview = File(p.join(targetDirectory.path, WordConverter.previewName));
+        try {
+          final result = await const WordConverter().convert(target, preview);
+          pdf = await PdfDocument.openFile(preview.path);
+          pageCount = pdf.pages.length;
+          if (pageCount <= 0) throw const FormatException('Word 文档没有可读页面。');
+          slideRenderer = result.renderer;
+          conversionIssue = result.notice;
+          try {
+            firstPageText = (await pdf.pages.first.loadStructuredText()).fullText;
+            if (kind == DocumentKind.unspecified) {
+              suggested = suggestPageMode(firstPageText);
+            }
+          } catch (_) {
+            // Indexing can extract text later.
+          }
+        } catch (error) {
+          await pdf?.dispose();
+          pdf = null;
+          if (await preview.exists()) await preview.delete();
+          pageCount = 1;
+          conversionIssue = 'Word 转换未完成：$error';
+        }
+      } else if (format == MaterialFormat.image) {
         final codec = await ui.instantiateImageCodec(
           await target.readAsBytes(),
         );
@@ -316,24 +379,36 @@ class DocumentService {
         title: title?.trim().isNotEmpty == true
             ? title!.trim()
             : p.basenameWithoutExtension(staged.sourceName),
-        kind: kind,
+        kind: switch (format) {
+          MaterialFormat.slides when kind == DocumentKind.unspecified => DocumentKind.textbook,
+          MaterialFormat.video => DocumentKind.video,
+          _ => kind,
+        },
         filePath: target.path,
         contentHash: staged.digest,
         pageCount: pageCount,
         originalName: staged.sourceName,
         format: staged.extension.replaceFirst('.', ''),
         sizeBytes: staged.sizeBytes,
+        suggestedKind: suggested,
+        conversionIssue: conversionIssue,
+        slideRenderer: slideRenderer,
         createdAt: now,
         addedAt: now,
       );
-      store.importDocument(
-        record,
-        List.generate(
-          pageCount,
-          (index) => PageRecord(documentId: id, page: index + 1),
-        ),
-      );
-      return ImportCommit(record: record, duplicate: false);
+      final commit = ImportCommit(record: record, duplicate: false);
+      store.transact(() {
+        store.importDocument(
+          record,
+          List.generate(
+            format == MaterialFormat.video ? 0 : pageCount,
+            (index) => PageRecord(documentId: id, page: index + 1,
+              text: index == 0 ? firstPageText : ''),
+          ),
+        );
+        register?.call(commit);
+      });
+      return commit;
     } catch (_) {
       await pdf?.dispose();
       pdf = null;
@@ -387,11 +462,98 @@ class DocumentService {
     if (stored == null || !stored.isActive) {
       throw StateError('资料在回收站里，恢复后才能打开。');
     }
+    if (record.usesConvertedPreview) {
+      final file = previewFile(record);
+      if (!await file.exists()) {
+        throw StateError(
+          record.conversionIssue ??
+              (record.isSlides ? '幻灯片页缺失，请重试课件转换。' : 'Word 预览页缺失，请重试文档转换。'),
+        );
+      }
+      return OpenDocument(record, await PdfDocument.openFile(file.path));
+    }
     final isPdf = p.extension(record.filePath).toLowerCase() == '.pdf';
     return OpenDocument(
       record,
       isPdf ? await PdfDocument.openFile(record.filePath) : null,
     );
+  }
+
+  File previewFile(DocumentRecord record) => File(
+    p.join(
+      p.dirname(record.filePath),
+      record.isWord ? WordConverter.previewName : SlideConverter.previewName,
+    ),
+  );
+
+  File slidePreview(DocumentRecord record) => previewFile(record);
+
+  Future<DocumentRecord> retrySlideConversion(DocumentRecord record) async {
+    final current = store.getDocument(record.id);
+    if (current == null ||
+        !current.isActive ||
+        !current.usesConvertedPreview ||
+        current.contentHash != record.contentHash) {
+      throw StateError('原资料已移动或删除，请重新打开。');
+    }
+    final path = previewFile(current);
+    if (current.slideRenderer != null && await path.exists()) return current;
+    final isWord = current.isWord;
+    try {
+      final String renderer;
+      final String? notice;
+      if (isWord) {
+        final conversion = await const WordConverter().convert(
+          File(current.filePath),
+          path,
+        );
+        renderer = conversion.renderer;
+        notice = conversion.notice;
+      } else {
+        final conversion = await const SlideConverter().convert(
+          File(current.filePath),
+          path,
+        );
+        renderer = conversion.renderer;
+        notice = conversion.notice;
+      }
+      final output = await PdfDocument.openFile(path.path);
+      final count = output.pages.length;
+      await output.dispose();
+      if (count < 1) {
+        throw FormatException(isWord ? 'Word 文档没有可读页面。' : '没有可读的幻灯片。');
+      }
+      final latest = store.getDocument(record.id);
+      if (latest == null ||
+          !latest.isActive ||
+          latest.lifecycleVersion != current.lifecycleVersion) {
+        throw StateError('资料状态发生变化，请重新打开。');
+      }
+      final updated = latest.copyWith(
+        pageCount: count,
+        slideRenderer: renderer,
+        conversionIssue: notice,
+        clearConversionIssue: notice == null,
+      );
+      store.transact(() {
+        store.saveDocumentRecord(updated);
+        for (var page = 1; page <= count; page++) {
+          if (store.getPage(record.id, page) == null) {
+            store.savePage(PageRecord(documentId: record.id, page: page));
+          }
+        }
+      });
+      return updated;
+    } catch (error) {
+      if (await path.exists()) await path.delete();
+      final latest = store.getDocument(current.id);
+      if (latest == null || !latest.isActive) rethrow;
+      final updated = latest.copyWith(
+        conversionIssue: '${isWord ? 'Word' : '课件'}转换未完成：$error',
+      );
+      store.saveDocumentRecord(updated);
+      return updated;
+    }
   }
 
   /// Text extraction and OCR are deliberately separate. A mixed page can be
@@ -468,7 +630,8 @@ class DocumentService {
             }
           }
           if (_canCommit(record, page, revision)) {
-            await replacePage(record, page, text.fullText, fragments);
+            final layout = PageEvidenceLayout(fragments);
+            await replacePage(record, page, text.fullText, layout.lines);
           }
           return;
         }
@@ -669,7 +832,15 @@ class DocumentService {
       if (p.equals(p.normalize(expected), p.normalize(document.filePath))) {
         continue;
       }
-      if (!await File(expected).exists()) continue;
+      final previewName = document.isWord
+          ? WordConverter.previewName
+          : SlideConverter.previewName;
+      if (!await File(expected).exists() &&
+          !document.isVideo &&
+          !(document.usesConvertedPreview &&
+              await File(p.join(p.dirname(expected), previewName)).exists())) {
+        continue;
+      }
       store.saveDocumentRecord(document.copyWith(filePath: expected));
       repaired++;
     }

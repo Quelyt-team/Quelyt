@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart' show kPrimaryButton;
 import 'package:flutter/material.dart';
 
 import '../core/models.dart';
@@ -43,6 +44,7 @@ class PageSurfaceState extends State<PageSurface> {
   final _transform = TransformationController();
   bool _selecting = false;
   int _rotation = 0;
+  int? _selectionPointer;
   Offset? _start;
   Size _viewport = Size.zero;
   Timer? _hintTimer;
@@ -73,7 +75,7 @@ class PageSurfaceState extends State<PageSurface> {
       _transform.value = Matrix4.identity();
       _rotation = 0;
       _selecting = false;
-      _start = null;
+      _endSelection();
     }
   }
 
@@ -95,6 +97,7 @@ class PageSurfaceState extends State<PageSurface> {
 
   void setSelecting(bool value) {
     if (_selecting == value) return;
+    _endSelection();
     setState(() => _selecting = value);
   }
 
@@ -132,6 +135,11 @@ class PageSurfaceState extends State<PageSurface> {
     }
   }
 
+  void _endSelection() {
+    _selectionPointer = null;
+    _start = null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
@@ -167,33 +175,50 @@ class PageSurfaceState extends State<PageSurface> {
                       hint: _selecting ? '拖动框选原文或图表' : '可缩放与平移',
                       child: RotatedBox(
                         quarterTurns: _rotation,
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onPanStart: !_selecting
-                              ? null
-                              : (details) {
-                                  _start = details.localPosition;
+                        child: MouseRegion(
+                          cursor: _selecting
+                              ? SystemMouseCursors.precise
+                              : SystemMouseCursors.grab,
+                          child: AnimatedContainer(
+                            duration: context.motion(Motion.base),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              boxShadow: AppShadow.paper,
+                            ),
+                            foregroundDecoration: BoxDecoration(
+                              border: Border.all(color: c.outlineStrong),
+                            ),
+                            child: SizedBox(
+                              width: size.width,
+                              height: size.height,
+                              child: Listener(
+                                behavior: HitTestBehavior.opaque,
+                                onPointerDown: (event) {
+                                  if (!_selecting ||
+                                      _selectionPointer != null ||
+                                      (event.buttons & kPrimaryButton) == 0) {
+                                    return;
+                                  }
+                                  _selectionPointer = event.pointer;
+                                  _start = event.localPosition;
                                   widget.onSelect(null);
                                 },
-                          onPanUpdate: !_selecting
-                              ? null
-                              : (details) =>
-                                    _select(details.localPosition, size),
-                          onPanEnd: !_selecting ? null : (_) => _start = null,
-                          child: MouseRegion(
-                            cursor: _selecting
-                                ? SystemMouseCursors.precise
-                                : SystemMouseCursors.grab,
-                            child: AnimatedContainer(
-                              duration: context.motion(Motion.base),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                border: Border.all(color: c.outlineStrong),
-                                boxShadow: AppShadow.paper,
-                              ),
-                              child: SizedBox(
-                                width: size.width,
-                                height: size.height,
+                                onPointerMove: (event) {
+                                  if (_selectionPointer == event.pointer) {
+                                    _select(event.localPosition, size);
+                                  }
+                                },
+                                onPointerUp: (event) {
+                                  if (_selectionPointer == event.pointer) {
+                                    _select(event.localPosition, size);
+                                    _endSelection();
+                                  }
+                                },
+                                onPointerCancel: (event) {
+                                  if (_selectionPointer == event.pointer) {
+                                    _endSelection();
+                                  }
+                                },
                                 child: Stack(
                                   fit: StackFit.expand,
                                   children: [
@@ -202,6 +227,14 @@ class PageSurfaceState extends State<PageSurface> {
                                       child: AnimatedSwitcher(
                                         duration: context.motion(Motion.base),
                                         switchInCurve: Curves.easeOut,
+                                        layoutBuilder: (current, previous) =>
+                                            Stack(
+                                              fit: StackFit.expand,
+                                              children: [
+                                                ...previous,
+                                                ?current,
+                                              ],
+                                            ),
                                         child: _pageImage(),
                                       ),
                                     ),

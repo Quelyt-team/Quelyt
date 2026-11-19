@@ -1,7 +1,7 @@
 ﻿name: local_study
 description: 本地优先、带原文出处的教材自学与论文精读客户端。
 publish_to: none
-version: 0.3.0-dev+34
+version: 0.3.0-dev+35
 
 environment:
   sdk: '>=3.13.0 <4.0.0'
@@ -15,14 +15,24 @@ dependencies:
   crypto: ^3.0.6
   desktop_drop: 0.8.4
   file_picker: ^10.3.10
+  ffi: ^2.1.4
   flutter_secure_storage: ^10.0.0
+  flutter_qjs_next: 1.5.2
+  flutter_svg: ^2.4.0
   http: ^1.6.0
+  media_kit: 1.2.6
+  media_kit_video: 2.0.1
+  media_kit_libs_video: 1.0.7
+  quelyt_formula_native:
+    path: native_formula
+  pdf: 3.13.1
   path: ^1.9.1
   path_provider: ^2.1.5
   pdfrx: 2.6.5
   sqlite3: ^3.1.0
   uuid: ^4.5.2
   url_launcher: 6.3.3
+  xml: ^7.0.1
 
 dev_dependencies:
   flutter_test:
@@ -34,6 +44,7 @@ flutter:
   assets:
     - assets/ocr/
     - assets/brand/
+    - assets/science/
     - licenses/
   fonts:
     - family: Manrope

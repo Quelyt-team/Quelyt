@@ -337,10 +337,14 @@ void main() {
     );
   });
 
-  test('a text-only preset cannot silently receive image pixels', () {
+  test('a text-only compatible endpoint cannot silently receive pixels', () {
     expect(
       () => gateway.prepare(
-        settings: ProviderSettings.deepSeek(),
+        settings: const ProviderSettings(
+          provider: '兼容服务',
+          baseUrl: 'https://example.test/v1',
+          model: 'deepseek-flash',
+        ),
         task: AiTask.explainImage,
         question: '解释公式',
         evidence: [source()],

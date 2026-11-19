@@ -1,20 +1,24 @@
-/// The learner's chosen study mode, not a required classification.
-///
-/// Import never asks for this value: [unspecified] is a first-class state that
-/// opens the general reading-and-Q&A path. Textbook self-study and paper close
-/// reading are opt-in switches inside the reader. The name and stored values
-/// stay compatible with the v0.1 library, where only textbook and paper
-/// existed.
-enum DocumentKind { unspecified, textbook, paper }
+import 'dart:math' as math;
+
+/// This preference selects study tools. The stored format selects the viewer.
+enum DocumentKind { unspecified, textbook, paper, exercise, video }
 
 extension DocumentKindX on DocumentKind {
   String get label => switch (this) {
-    DocumentKind.textbook => '教材自学',
-    DocumentKind.paper => '论文精读',
+    DocumentKind.textbook => '教材',
+    DocumentKind.paper => '论文',
+    DocumentKind.exercise => '试题',
+    DocumentKind.video => '视频',
     DocumentKind.unspecified => '阅读与问答',
   };
 
   bool get isSpecified => this != DocumentKind.unspecified;
+
+  static const pageModes = [
+    DocumentKind.exercise,
+    DocumentKind.textbook,
+    DocumentKind.paper,
+  ];
 
   /// Unknown or missing legacy values degrade to the general path instead of
   /// silently becoming "paper", which the old binary branch implied.
@@ -35,7 +39,7 @@ enum DocumentLifecycle {
       DocumentLifecycle.values.asNameMap()[value as String? ?? ''] ?? active;
 }
 
-enum EvidenceOrigin { text, ocr, manual }
+enum EvidenceOrigin { text, ocr, manual, vision }
 
 enum PageStatus { pending, ready, needsOcr, failed }
 
@@ -71,6 +75,20 @@ class SourceRegion {
       right > other.left &&
       top < other.bottom &&
       bottom > other.top;
+
+  SourceRegion union(SourceRegion other) => SourceRegion(
+    math.min(left, other.left),
+    math.min(top, other.top),
+    math.max(right, other.right),
+    math.max(bottom, other.bottom),
+  );
+
+  SourceRegion within(SourceRegion parent) => SourceRegion(
+    parent.left + left * parent.width,
+    parent.top + top * parent.height,
+    parent.left + right * parent.width,
+    parent.top + bottom * parent.height,
+  );
 
   SourceRegion rotateClockwise() =>
       SourceRegion(1 - bottom, left, 1 - top, right);
@@ -123,6 +141,27 @@ DateTime _date(dynamic value) => DateTime.parse(value as String);
 Map<String, dynamic> _map(dynamic value) =>
     Map<String, dynamic>.from(value as Map);
 
+enum MaterialFormat { pdf, image, slides, word, video, unknown }
+
+extension MaterialFormatX on MaterialFormat {
+  static const extensions = {
+    'pdf': MaterialFormat.pdf,
+    'jpg': MaterialFormat.image,
+    'jpeg': MaterialFormat.image,
+    'png': MaterialFormat.image,
+    'ppt': MaterialFormat.slides,
+    'pptx': MaterialFormat.slides,
+    'doc': MaterialFormat.word,
+    'docx': MaterialFormat.word,
+    'mp4': MaterialFormat.video,
+    'webm': MaterialFormat.video,
+    'mkv': MaterialFormat.video,
+  };
+
+  static MaterialFormat parse(String value) =>
+      extensions[value.toLowerCase()] ?? MaterialFormat.unknown;
+}
+
 class DocumentRecord {
   DocumentRecord({
     required this.id,
@@ -135,6 +174,9 @@ class DocumentRecord {
     this.originalName = '',
     this.format = '',
     this.sizeBytes = 0,
+    this.suggestedKind,
+    this.conversionIssue,
+    this.slideRenderer,
     this.lifecycle = DocumentLifecycle.active,
     this.lifecycleVersion = 1,
     this.starred = false,
@@ -164,6 +206,9 @@ class DocumentRecord {
   /// File format without the leading dot, e.g. `pdf`, `png`.
   final String format;
   final int sizeBytes;
+  final DocumentKind? suggestedKind;
+  final String? conversionIssue;
+  final String? slideRenderer;
   final DocumentLifecycle lifecycle;
 
   /// Bumped on every lifecycle transition. Background work captures it and
@@ -179,6 +224,12 @@ class DocumentRecord {
   bool get isActive => lifecycle == DocumentLifecycle.active;
   bool get isTrashed => lifecycle == DocumentLifecycle.trashed;
   bool get isPurging => lifecycle == DocumentLifecycle.purging;
+  MaterialFormat get materialFormat => MaterialFormatX.parse(format);
+  bool get isVideo => materialFormat == MaterialFormat.video;
+  bool get isSlides => materialFormat == MaterialFormat.slides;
+  bool get isWord => materialFormat == MaterialFormat.word;
+  bool get usesConvertedPreview => isSlides || isWord;
+  String get pageUnit => isSlides ? '张幻灯片' : '页';
 
   DocumentRecord copyWith({
     String? id,
@@ -191,6 +242,10 @@ class DocumentRecord {
     String? originalName,
     String? format,
     int? sizeBytes,
+    DocumentKind? suggestedKind,
+    String? conversionIssue,
+    bool clearConversionIssue = false,
+    String? slideRenderer,
     DocumentLifecycle? lifecycle,
     int? lifecycleVersion,
     bool? starred,
@@ -212,6 +267,11 @@ class DocumentRecord {
     originalName: originalName ?? this.originalName,
     format: format ?? this.format,
     sizeBytes: sizeBytes ?? this.sizeBytes,
+    suggestedKind: suggestedKind ?? this.suggestedKind,
+    conversionIssue: clearConversionIssue
+        ? null
+        : conversionIssue ?? this.conversionIssue,
+    slideRenderer: slideRenderer ?? this.slideRenderer,
     lifecycle: lifecycle ?? this.lifecycle,
     lifecycleVersion: lifecycleVersion ?? this.lifecycleVersion,
     starred: starred ?? this.starred,
@@ -235,6 +295,9 @@ class DocumentRecord {
     'originalName': originalName,
     'format': format,
     'sizeBytes': sizeBytes,
+    if (suggestedKind != null) 'suggestedKind': suggestedKind!.name,
+    if (conversionIssue != null) 'conversionIssue': conversionIssue,
+    if (slideRenderer != null) 'slideRenderer': slideRenderer,
     'lifecycle': lifecycle.name,
     'lifecycleVersion': lifecycleVersion,
     'starred': starred,
@@ -256,6 +319,11 @@ class DocumentRecord {
     originalName: json['originalName'] as String? ?? '',
     format: json['format'] as String? ?? '',
     sizeBytes: (json['sizeBytes'] as num?)?.toInt() ?? 0,
+    suggestedKind: json['suggestedKind'] == null
+        ? null
+        : DocumentKindX.parse(json['suggestedKind']),
+    conversionIssue: json['conversionIssue'] as String?,
+    slideRenderer: json['slideRenderer'] as String?,
     lifecycle: DocumentLifecycle.parse(json['lifecycle']),
     lifecycleVersion: (json['lifecycleVersion'] as num?)?.toInt() ?? 1,
     starred: json['starred'] as bool? ?? false,
@@ -279,6 +347,8 @@ class Evidence {
     required this.text,
     this.origin = EvidenceOrigin.text,
     this.confidence,
+    this.timeMs,
+    this.locatorLabel,
   });
 
   final String id;
@@ -289,6 +359,8 @@ class Evidence {
   final String text;
   final EvidenceOrigin origin;
   final double? confidence;
+  final int? timeMs;
+  final String? locatorLabel;
 
   Evidence copyWith({
     String? id,
@@ -299,6 +371,8 @@ class Evidence {
     String? text,
     EvidenceOrigin? origin,
     double? confidence,
+    int? timeMs,
+    String? locatorLabel,
   }) => Evidence(
     id: id ?? this.id,
     documentId: documentId ?? this.documentId,
@@ -308,6 +382,8 @@ class Evidence {
     text: text ?? this.text,
     origin: origin ?? this.origin,
     confidence: confidence ?? this.confidence,
+    timeMs: timeMs ?? this.timeMs,
+    locatorLabel: locatorLabel ?? this.locatorLabel,
   );
 
   Map<String, dynamic> toJson() => {
@@ -319,6 +395,8 @@ class Evidence {
     'text': text,
     'origin': origin.name,
     'confidence': confidence,
+    if (timeMs != null) 'timeMs': timeMs,
+    if (locatorLabel != null) 'locatorLabel': locatorLabel,
   };
 
   factory Evidence.fromJson(Map<String, dynamic> json) => Evidence(
@@ -330,6 +408,8 @@ class Evidence {
     text: json['text'] as String,
     origin: EvidenceOrigin.values.byName(json['origin'] as String),
     confidence: (json['confidence'] as num?)?.toDouble(),
+    timeMs: (json['timeMs'] as num?)?.toInt(),
+    locatorLabel: json['locatorLabel'] as String?,
   );
 }
 

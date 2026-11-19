@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:local_study/app_controller.dart';
 import 'package:local_study/core/local_store.dart';
+import 'package:local_study/core/models.dart';
 import 'package:local_study/features/library/data/library_repository.dart';
 import 'package:local_study/features/notes/data/notes_repository.dart';
 import 'package:local_study/features/notes/notes_controller.dart';
@@ -23,8 +24,10 @@ import 'package:local_study/services/file_reveal.dart';
 import 'package:local_study/services/ocr_service.dart';
 import 'package:local_study/services/platform_file_access.dart';
 import 'package:local_study/ui/shell/app_shell.dart';
+import 'package:local_study/ui/study_app.dart';
 import 'package:local_study/ui/theme/adaptive_layout.dart';
 import 'package:local_study/ui/theme/app_theme.dart';
+import 'package:local_study/ui/widgets/quelyt_splash.dart';
 
 class _TestVault implements CredentialVault {
   final _map = <String, String>{};
@@ -381,5 +384,188 @@ void main() {
     await tester.tap(backFinder);
     await tester.pumpAndSettle();
     expect(controller.selected, isNull);
+  });
+
+  group('Compact header & startup splash animation', () {
+    late Directory activeDir;
+    late LocalStore activeStore;
+    late StudyController activeStudy;
+
+    setUp(() async {
+      activeDir = Directory.systemTemp.createTempSync('splash-adapt-');
+      activeStore = LocalStore.inMemory();
+      final ocr = OcrService();
+      activeStudy = StudyController(
+        store: activeStore,
+        ocr: ocr,
+        documents: DocumentService(activeDir, activeStore, ocr),
+        gateway: AiGateway(vault: _TestVault()),
+      );
+      await Future<void>.value();
+    });
+
+    tearDown(() async {
+      await activeStudy.shutdown();
+      activeStudy.dispose();
+      if (activeDir.existsSync()) {
+        activeDir.deleteSync(recursive: true);
+      }
+    });
+
+    testWidgets(
+      'Compact phone hides window caption controls, places settings at top-right, and plays startup splash cleanly',
+      (tester) async {
+        tester.view.physicalSize = const Size(390, 844);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.reset);
+
+        await tester.pumpWidget(
+          StudyApp(
+            controller: activeStudy,
+            showWindowChrome: true,
+            showSplash: true,
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 120));
+        expect(find.byType(QuelytSplashOverlay), findsOneWidget);
+        expect(
+          find.descendant(
+            of: find.byType(QuelytSplashOverlay),
+            matching: find.byType(CustomPaint),
+          ),
+          findsWidgets,
+        );
+        expect(tester.takeException(), isNull);
+
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(tester.takeException(), isNull);
+
+        await tester.pumpAndSettle();
+        expect(find.byKey(const ValueKey('caption-minimize')), findsNothing);
+        expect(find.byKey(const ValueKey('caption-maximize')), findsNothing);
+        expect(find.byKey(const ValueKey('caption-close')), findsNothing);
+
+        final settingsBtn = find.byTooltip('设置（Ctrl+,）');
+        expect(settingsBtn, findsOneWidget);
+        expect(tester.getCenter(settingsBtn).dx, greaterThan(320));
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets(
+      'Compact reader capsule opens Q&A and Notes directly instead of jumping to Study, and handles 2.0x scale',
+      (tester) async {
+        tester.view.physicalSize = const Size(390, 844);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.reset);
+
+        final doc = DocumentRecord(
+          id: 'compact-doc',
+          title: '线性代数讲义',
+          kind: DocumentKind.unspecified,
+          filePath: 'test-only.png',
+          contentHash: 'compact-doc-hash',
+          pageCount: 12,
+          currentPage: 2,
+        );
+        activeStore.importDocument(doc, [
+          for (var p = 1; p <= 12; p++)
+            PageRecord(
+              documentId: doc.id,
+              page: p,
+              status: PageStatus.ready,
+              text: '第 $p 页正文内容。',
+            ),
+        ]);
+        activeStudy.current = doc;
+        activeStudy.page = 2;
+
+        await tester.pumpWidget(StudyApp(controller: activeStudy));
+        await tester.pumpAndSettle();
+
+        // Sheet starts collapsed; tapping Q&A (index 1) must land on Q&A, not Study.
+        await tester.tap(find.byKey(const ValueKey('learning-dock-1')));
+        await tester.pumpAndSettle();
+        expect(find.text('暂无问答'), findsOneWidget);
+        expect(find.text('直接开始阅读'), findsNothing);
+
+        // Switching to Notes (index 2) while open lands on Notes.
+        await tester.tap(find.byKey(const ValueKey('learning-dock-2')));
+        await tester.pumpAndSettle();
+        expect(find.text('暂无笔记'), findsOneWidget);
+
+        // Tapping active Notes item collapses the sheet.
+        await tester.tap(find.byKey(const ValueKey('learning-dock-2')));
+        await tester.pumpAndSettle();
+        expect(find.text('暂无笔记'), findsNothing);
+
+        // Tapping Notes (index 2) from collapsed must land directly on Notes, not Study.
+        await tester.tap(find.byKey(const ValueKey('learning-dock-2')));
+        await tester.pumpAndSettle();
+        expect(find.text('暂无笔记'), findsOneWidget);
+        expect(find.text('直接开始阅读'), findsNothing);
+
+        // Narrow 320px viewport with 2.0x text scale renders capsule without overflow.
+        tester.view.physicalSize = const Size(320, 640);
+        tester.platformDispatcher.textScaleFactorTestValue = 2.0;
+        addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets(
+      'Exercise mode renders ExerciseStudyPanel in compact reader and allows switching modes',
+      (tester) async {
+        tester.view.physicalSize = const Size(390, 844);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.reset);
+
+        final doc = DocumentRecord(
+          id: 'exercise-doc',
+          title: '物理化学第一章习题',
+          kind: DocumentKind.exercise,
+          filePath: 'test-only.png',
+          contentHash: 'exercise-doc-hash',
+          pageCount: 4,
+          currentPage: 1,
+        );
+        activeStore.importDocument(doc, [
+          PageRecord(
+            documentId: doc.id,
+            page: 1,
+            status: PageStatus.ready,
+            text: '1. 计算理想气体等温可逆膨胀功。\n1) 求 Q 和 W。\n2) 求 ΔU。',
+          ),
+        ]);
+        activeStore.saveEvidence(
+          Evidence(
+            id: 'ex-e1',
+            documentId: doc.id,
+            documentHash: doc.contentHash,
+            page: 1,
+            region: const SourceRegion(.1, .1, .9, .3),
+            text: '1. 计算理想气体等温可逆膨胀功。\n1) 求 Q 和 W。\n2) 求 ΔU。',
+          ),
+        );
+        activeStudy.current = doc;
+        activeStudy.page = 1;
+
+        await tester.pumpWidget(StudyApp(controller: activeStudy));
+        await tester.pumpAndSettle();
+
+        // Open Study tab (index 0) on compact phone.
+        await tester.tap(find.byKey(const ValueKey('learning-dock-0')));
+        await tester.pumpAndSettle();
+
+        expect(find.text('试题进度'), findsOneWidget);
+        expect(find.text('求解与整理'), findsOneWidget);
+        expect(find.text('解答页段'), findsOneWidget);
+        expect(find.text('处理整份作业'), findsOneWidget);
+        expect(find.text('暂未选定学习方式'), findsNothing);
+        expect(find.byTooltip('切换学习方式'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      },
+    );
   });
 }

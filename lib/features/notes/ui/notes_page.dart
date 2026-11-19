@@ -1,5 +1,6 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
 
 import '../../../app_controller.dart';
 import '../../../ui/theme/tokens.dart';
@@ -39,6 +40,13 @@ class NotesPage extends StatefulWidget {
 }
 
 class _NotesPageState extends State<NotesPage> with WidgetsBindingObserver {
+  String? get _snapshotDirectory {
+    final study = widget.study;
+    return study == null
+        ? null
+        : p.join(study.documents.directory.path, 'review_assets');
+  }
+
   final _title = TextEditingController();
   final _body = TextEditingController();
   final _bodyFocus = FocusNode();
@@ -128,10 +136,7 @@ class _NotesPageState extends State<NotesPage> with WidgetsBindingObserver {
         SnackBar(
           content: Text(error ?? notice!),
           action: canUndo
-              ? SnackBarAction(
-                  label: '撤销',
-                  onPressed: notes.undoLastTrash,
-                )
+              ? SnackBarAction(label: '撤销', onPressed: notes.undoLastTrash)
               : null,
         ),
       );
@@ -140,9 +145,8 @@ class _NotesPageState extends State<NotesPage> with WidgetsBindingObserver {
 
   Future<void> _toast(String message) async {
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -238,16 +242,10 @@ class _NotesPageState extends State<NotesPage> with WidgetsBindingObserver {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   if (compact)
-                    _smallIconButton(
-                      context,
-                      QIcons.back,
-                      '返回列表',
-                      () {
-                        notes.flushNow();
-                        notes.closeSelected();
-                      },
-                      minExtent: 48,
-                    ),
+                    _smallIconButton(context, QIcons.back, '返回列表', () {
+                      notes.flushNow();
+                      notes.closeSelected();
+                    }, minExtent: 48),
                   Expanded(
                     child: TextField(
                       controller: _title,
@@ -403,10 +401,7 @@ class _NotesPageState extends State<NotesPage> with WidgetsBindingObserver {
                         child: Text('复制 Markdown'),
                       ),
                       if (trashed)
-                        const PopupMenuItem(
-                          value: 'purge',
-                          child: Text('永久删除'),
-                        )
+                        const PopupMenuItem(value: 'purge', child: Text('永久删除'))
                       else
                         const PopupMenuItem(
                           value: 'delete',
@@ -476,10 +471,7 @@ class _NotesPageState extends State<NotesPage> with WidgetsBindingObserver {
                         onPressed: notes.restoreSelected,
                         child: const Text('恢复'),
                       ),
-                      TextButton(
-                        onPressed: _purge,
-                        child: const Text('永久删除'),
-                      ),
+                      TextButton(onPressed: _purge, child: const Text('永久删除')),
                     ],
                   ),
                 ),
@@ -536,8 +528,7 @@ class _NotesPageState extends State<NotesPage> with WidgetsBindingObserver {
                                   height: 1.85,
                                 ),
                                 decoration: InputDecoration(
-                                  hintText:
-                                      '写下你的理解…\n支持 Markdown：# 标题、- 列表、- [ ] 待办、\$x^2\$ 公式',
+                                  hintText: '写下你的理解…\n支持 Markdown：# 标题、- 列表、- [ ] 待办、\$x^2\$ 公式',
                                   hintStyle: context.texts.bodyMedium!.copyWith(
                                     fontSize: 14.5,
                                     height: 1.85,
@@ -559,6 +550,7 @@ class _NotesPageState extends State<NotesPage> with WidgetsBindingObserver {
                           controller: notes,
                           onAddQuestion: _addQuestion,
                           onOpenSource: widget.onOpenSource,
+                          assetDirectory: _snapshotDirectory,
                           sidebarStyle: false,
                         ),
                       ],
@@ -572,12 +564,7 @@ class _NotesPageState extends State<NotesPage> with WidgetsBindingObserver {
                             const VerticalDivider(width: 1),
                             Expanded(
                               child: ListView(
-                                padding: EdgeInsets.fromLTRB(
-                                  24,
-                                  18,
-                                  24,
-                                  44,
-                                ),
+                                padding: EdgeInsets.fromLTRB(24, 18, 24, 44),
                                 children: [
                                   NoteMarkdownPreview(
                                     text: notes.draftBody,
@@ -631,6 +618,7 @@ class _NotesPageState extends State<NotesPage> with WidgetsBindingObserver {
                                       controller: notes,
                                       onAddQuestion: _addQuestion,
                                       onOpenSource: widget.onOpenSource,
+                                      assetDirectory: _snapshotDirectory,
                                       onCollapse: () => setState(
                                         () => _showContextDrawer = false,
                                       ),
@@ -659,10 +647,7 @@ class _NotesPageState extends State<NotesPage> with WidgetsBindingObserver {
       color: context.colors.tint,
       borderRadius: BorderRadius.circular(Radii.sm),
     ),
-    child: Text(
-      label,
-      style: context.texts.bodySmall!.copyWith(fontSize: 12),
-    ),
+    child: Text(label, style: context.texts.bodySmall!.copyWith(fontSize: 12)),
   );
 
   Widget _saveIndicator(BuildContext context) {
@@ -738,9 +723,7 @@ class _NotesPageState extends State<NotesPage> with WidgetsBindingObserver {
               child: SizedBox(
                 width: 30,
                 height: 28,
-                child: Center(
-                  child: QIcon(icon, size: 14, color: colors.ink),
-                ),
+                child: Center(child: QIcon(icon, size: 14, color: colors.ink)),
               ),
             ),
           ),
@@ -778,11 +761,7 @@ class _NotesPageState extends State<NotesPage> with WidgetsBindingObserver {
                   divider(),
                   textBtn('</>', '代码块', () => _wrap('\n```\n', '\n```\n')),
                   textBtn('∑', '数学公式块', () => _wrap('\n\$\$\n', '\n\$\$\n')),
-                  iconBtn(
-                    QIcons.link,
-                    '插入链接',
-                    () => _wrap('[', '](https://)'),
-                  ),
+                  iconBtn(QIcons.link, '插入链接', () => _wrap('[', '](https://)')),
                 ],
               ),
             ),
@@ -916,11 +895,7 @@ class _NotesPageState extends State<NotesPage> with WidgetsBindingObserver {
   }
 
   Future<void> _addQuestion() async {
-    final text = await _promptText(
-      title: '添加待解决问题',
-      label: '问题',
-      lines: 3,
-    );
+    final text = await _promptText(title: '添加待解决问题', label: '问题', lines: 3);
     if (text == null || text.trim().isEmpty) return;
     notes.addQuestion(text);
   }
@@ -970,10 +945,7 @@ class _NotesPageState extends State<NotesPage> with WidgetsBindingObserver {
               const SizedBox(height: Space.md),
               OutlinedButton.icon(
                 onPressed: () async {
-                  final name = await _promptText(
-                    title: '新建标签',
-                    label: '标签名称',
-                  );
+                  final name = await _promptText(title: '新建标签', label: '标签名称');
                   if (name == null || name.trim().isEmpty) return;
                   final tag = notes.createTag(name.trim());
                   setDialogState(() => selected.add(tag.id));
@@ -1130,8 +1102,8 @@ class _NotesPageState extends State<NotesPage> with WidgetsBindingObserver {
     Color? color,
     double? minExtent,
   }) {
-    final extent = minExtent ??
-        (MediaQuery.sizeOf(context).width < 840 ? 44.0 : 28.0);
+    final extent =
+        minExtent ?? (MediaQuery.sizeOf(context).width < 840 ? 44.0 : 28.0);
     return IconButton(
       tooltip: tooltip,
       onPressed: action,

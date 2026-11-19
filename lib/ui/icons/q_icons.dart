@@ -111,11 +111,124 @@ abstract final class QIcons {
     QLine(8.5, 16, 13, 16),
   ]);
 
+  /// PDF 文档: folded folio containing a stylized PDF ribbon loop.
+  static const filePdf = QIconData('filePdf', [
+    QPath(
+      'M14 3H7.5A2.5 2.5 0 0 0 5 5.5v13A2.5 2.5 0 0 0 7.5 21h9'
+      'a2.5 2.5 0 0 0 2.5-2.5V8z',
+    ),
+    QPath('M14 3v3.5A1.5 1.5 0 0 0 15.5 8H19'),
+    QPath(
+      'M12 10.6c-.7 2.4-1.9 4.9-3.6 6.7 2.2-.8 4.9-1.1 7.2-.9'
+      '-1.6-1.4-2.8-3.4-3.6-5.8z',
+    ),
+  ]);
+
+  /// 图片文件 (PNG / JPG / JPEG): framed landscape with sun and ridge.
+  static const fileImage = QIconData('fileImage', [
+    QRect(3, 4.5, 18, 15, r: 2.5),
+    QCircle(8.5, 9.25, 1.5),
+    QPath(
+      'M3.8 17.2l4.4-4.4a1.5 1.5 0 0 1 2.12 0L13 15.5'
+      'l1.8-1.8a1.5 1.5 0 0 1 2.12 0l3.3 3.3',
+    ),
+  ]);
+
+  /// 幻灯片课件 (PPT / PPTX): projection screen on an easel with chart bars.
+  static const fileSlides = QIconData('fileSlides', [
+    QLine(2.5, 4.5, 21.5, 4.5),
+    QPath('M4 4.5v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-10'),
+    QLine(12, 16.5, 12, 20.5),
+    QLine(8.5, 20.5, 12, 16.5),
+    QLine(15.5, 20.5, 12, 16.5),
+    QLine(8.5, 13, 8.5, 11),
+    QLine(12, 13, 12, 8.5),
+    QLine(15.5, 13, 15.5, 10),
+  ]);
+
+  /// 视频文件 (MP4 / WebM / MKV): clapper-top media frame with play triangle.
+  static const fileVideo = QIconData('fileVideo', [
+    QRect(3, 4.5, 18, 15, r: 2.5),
+    QLine(3, 8.75, 21, 8.75),
+    QLine(8.75, 4.5, 7.25, 8.75),
+    QLine(14.75, 4.5, 13.25, 8.75),
+    QPath('M10.25 11.4l4.75 2.75-4.75 2.75z', fill: QFill.active),
+  ]);
+
+  /// Word 文档 (DOC / DOCX): folded folio with crisp geometric W monogram.
+  static const fileWord = QIconData('fileWord', [
+    QPath(
+      'M14 3H7.5A2.5 2.5 0 0 0 5 5.5v13A2.5 2.5 0 0 0 7.5 21h9'
+      'a2.5 2.5 0 0 0 2.5-2.5V8z',
+    ),
+    QPath('M14 3v3.5A1.5 1.5 0 0 0 15.5 8H19'),
+    QPath('M8.25 11.5l1.35 5.25 2.4-4 2.4 4 1.35-5.25'),
+  ]);
+
+  /// 通用文件: minimal folded sheet.
+  static const fileGeneric = QIconData('fileGeneric', [
+    QPath(
+      'M14 3H7.5A2.5 2.5 0 0 0 5 5.5v13A2.5 2.5 0 0 0 7.5 21h9'
+      'a2.5 2.5 0 0 0 2.5-2.5V8z',
+    ),
+    QPath('M14 3v3.5A1.5 1.5 0 0 0 15.5 8H19'),
+    QLine(8.5, 13.5, 15.5, 13.5),
+  ]);
+
   /// 学习: an open book with a bookmark on the right page.
   static const study = QIconData('study', [
     QPath('M3 5h5a4 4 0 0 1 4 4v11a3 3 0 0 0-3-3H3z'),
     QPath('M21 5h-5a4 4 0 0 0-4 4v11a3 3 0 0 1 3-3h6z'),
     QPath('M15.5 5v5l1.25-1 1.25 1V5', fill: QFill.active),
+  ]);
+
+  /// 阅读胶囊·学习: balanced open folio with rounded corners and active bookmark.
+  static const dockStudy = QIconData('dockStudy', [
+    QPath(
+      'M3 5.5A1.5 1.5 0 0 1 4.5 4H9a3 3 0 0 1 3 3v12.5'
+      'a2.5 2.5 0 0 0-2.5-2.5h-5A1.5 1.5 0 0 1 3 15.5z',
+    ),
+    QPath(
+      'M21 5.5A1.5 1.5 0 0 0 19.5 4H15a3 3 0 0 0-3 3v12.5'
+      'a2.5 2.5 0 0 1 2.5-2.5h5A1.5 1.5 0 0 0 21 15.5z',
+    ),
+    QPath('M15 4v6l1.5-1.2L18 10V4', fill: QFill.active),
+  ]);
+
+  /// 阅读胶囊·试题: clean problem sheet with check mark and answer lines.
+  static const dockExercise = QIconData('dockExercise', [
+    QRect(4.5, 3.5, 15, 17, r: 2.5),
+    QPath('M7.75 9.25l1.4 1.4 2.85-2.9'),
+    QLine(14, 9.25, 16.5, 9.25),
+    QLine(7.75, 13.75, 16.5, 13.75),
+    QLine(7.75, 16.75, 13.25, 16.75),
+  ]);
+
+  /// 阅读胶囊·问答: rounded chat bubble enclosing a 4-point AI spark.
+  static const dockQa = QIconData('dockQa', [
+    QPath(
+      'M6 4h12a2.5 2.5 0 0 1 2.5 2.5v8A2.5 2.5 0 0 1 18 17h-5.5'
+      'L8.25 20.25V17H6a2.5 2.5 0 0 1-2.5-2.5v-8A2.5 2.5 0 0 1 6 4z',
+    ),
+    QPath(
+      'M12 7.2c.35 1.85 1.45 2.95 3.3 3.3-1.85.35-2.95 1.45-3.3 3.3'
+      '-.35-1.85-1.45-2.95-3.3-3.3 1.85-.35 2.95-1.45 3.3-3.3z',
+      fill: QFill.active,
+    ),
+  ]);
+
+  /// 阅读胶囊·笔记: rounded note sheet with writing lines and angled stylus.
+  static const dockNotes = QIconData('dockNotes', [
+    QPath(
+      'M13.5 4H6.5A2.5 2.5 0 0 0 4 6.5v11A2.5 2.5 0 0 0 6.5 20h11'
+      'a2.5 2.5 0 0 0 2.5-2.5v-6',
+    ),
+    QLine(7.5, 13.25, 11.5, 13.25),
+    QLine(7.5, 16.25, 14.5, 16.25),
+    QPath(
+      'M18.6 3.9a1.65 1.65 0 0 1 2.33 2.33l-7.2 7.2-3.05.72.72-3.05z',
+      fill: QFill.active,
+    ),
   ]);
 
   /// 跳页 / 页码.
@@ -713,8 +826,9 @@ abstract final class QIcons {
   /// Every icon, in contact-sheet order.
   static const all = <QIconData>[
     library, schedule, review, settings, sidebar, back, //
-    textbook, paper, study, page, ocr, region, regionSearch, clear, fit,
-    rotate, mouse, //
+    textbook, paper, filePdf, fileWord, fileImage, fileSlides, fileVideo,
+    fileGeneric, study, dockStudy, dockExercise, dockQa, dockNotes, page, ocr,
+    region, regionSearch, clear, fit, rotate, mouse, //
     ai, anchor, recall, qa, notes, verify, knowledge, model, translate, web,
     deepSearch, keyboard, //
     plan, today, done, missed, repeat, milestone, duration, catchUp, rest,

@@ -20,6 +20,9 @@ abstract final class AppChrome {
   static const double captionWidth = captionButtonWidth * captionButtonCount;
   static const double glyphBox = 10;
   static const double glyphStroke = 1.1;
+
+  /// Only native desktop Windows uses the custom borderless window caption.
+  static bool get isDesktopWindowChromeSupported => Platform.isWindows;
 }
 
 /// Owns the single `quelyt/window` channel handler.
@@ -110,37 +113,45 @@ class _WindowCaptionControlsState extends State<WindowCaptionControls> {
   }
 
   @override
-  Widget build(BuildContext context) => ValueListenableBuilder<bool>(
-    valueListenable: WindowState.instance.maximized,
-    builder: (context, maximized, _) => Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        _CaptionButton(
-          key: const ValueKey('caption-minimize'),
-          glyph: CaptionGlyph.minimize,
-          label: '最小化',
-          onTap: widget.onMinimize ?? WindowState.instance.minimize,
-        ),
-        _CaptionButton(
-          key: const ValueKey('caption-maximize'),
-          glyph: maximized ? CaptionGlyph.restore : CaptionGlyph.maximize,
-          label: maximized ? '还原' : '最大化',
-          onTap:
-              widget.onMaximize ??
-              () {
-                WindowState.instance.toggleMaximize();
-              },
-        ),
-        _CaptionButton(
-          key: const ValueKey('caption-close'),
-          glyph: CaptionGlyph.close,
-          label: '关闭',
-          close: true,
-          onTap: widget.onClose ?? WindowState.instance.close,
-        ),
-      ],
-    ),
-  );
+  Widget build(BuildContext context) {
+    if (!Platform.isWindows &&
+        widget.onMinimize == null &&
+        widget.onMaximize == null &&
+        widget.onClose == null) {
+      return const SizedBox.shrink();
+    }
+    return ValueListenableBuilder<bool>(
+      valueListenable: WindowState.instance.maximized,
+      builder: (context, maximized, _) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _CaptionButton(
+            key: const ValueKey('caption-minimize'),
+            glyph: CaptionGlyph.minimize,
+            label: '最小化',
+            onTap: widget.onMinimize ?? WindowState.instance.minimize,
+          ),
+          _CaptionButton(
+            key: const ValueKey('caption-maximize'),
+            glyph: maximized ? CaptionGlyph.restore : CaptionGlyph.maximize,
+            label: maximized ? '还原' : '最大化',
+            onTap:
+                widget.onMaximize ??
+                () {
+                  WindowState.instance.toggleMaximize();
+                },
+          ),
+          _CaptionButton(
+            key: const ValueKey('caption-close'),
+            glyph: CaptionGlyph.close,
+            label: '关闭',
+            close: true,
+            onTap: widget.onClose ?? WindowState.instance.close,
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _CaptionButton extends StatefulWidget {

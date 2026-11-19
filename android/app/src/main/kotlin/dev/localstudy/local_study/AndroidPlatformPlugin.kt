@@ -37,7 +37,7 @@ class AndroidPlatformPlugin :
         private const val REQUEST_SAVE_DOCUMENT = 4102
         private const val DEFAULT_MAX_FILES = 5000
         private const val BUFFER_BYTES = 64 * 1024
-        private val SUPPORTED_EXTENSIONS = setOf("pdf", "jpg", "jpeg", "png")
+        private val SUPPORTED_EXTENSIONS = setOf("pdf", "jpg", "jpeg", "png", "ppt", "pptx", "doc", "docx", "mp4", "webm", "mkv")
     }
 
     private lateinit var appContext: android.content.Context
@@ -218,6 +218,14 @@ class AndroidPlatformPlugin :
                     pendingShares.clear()
                 }
                 result.success(drained)
+            }
+            "availableBytes" -> {
+                val path = call.argument<String>("path")
+                try {
+                    result.success(path?.let { android.os.StatFs(it).availableBytes })
+                } catch (error: IllegalArgumentException) {
+                    result.success(null)
+                }
             }
             "pickDirectoryAndStage" -> {
                 val host = activity
@@ -402,7 +410,7 @@ class AndroidPlatformPlugin :
             )
             val ext = inferSupportedExtension(displayName, resolvedMime)
             if (ext == null) {
-                rejected.add("$displayName：暂不支持的格式（仅支持 PDF / JPG / PNG）")
+                rejected.add("$displayName：暂不支持的学习资料格式")
                 continue
             }
             val finalName = if (displayName.lowercase().endsWith(".$ext")) {
@@ -412,6 +420,9 @@ class AndroidPlatformPlugin :
             }
             val target = uniqueChildFile(root, finalName)
             try {
+                if (meta.sizeBytes > 0 && android.os.StatFs(root.absolutePath).availableBytes < meta.sizeBytes) {
+                    throw IllegalStateException("设备空间不足")
+                }
                 val input = resolver.openInputStream(uri)
                     ?: throw IllegalStateException("无法打开授权内容流")
                 val copied = input.use { src ->
@@ -752,6 +763,13 @@ class AndroidPlatformPlugin :
             "application/pdf" -> "pdf"
             "image/jpeg", "image/jpg" -> "jpg"
             "image/png" -> "png"
+            "application/vnd.ms-powerpoint" -> "ppt"
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation" -> "pptx"
+            "application/msword" -> "doc"
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> "docx"
+            "video/mp4" -> "mp4"
+            "video/webm" -> "webm"
+            "video/x-matroska" -> "mkv"
             else -> null
         }
     }
@@ -762,6 +780,13 @@ class AndroidPlatformPlugin :
             lower.endsWith(".pdf") -> "application/pdf"
             lower.endsWith(".png") -> "image/png"
             lower.endsWith(".jpg") || lower.endsWith(".jpeg") -> "image/jpeg"
+            lower.endsWith(".ppt") -> "application/vnd.ms-powerpoint"
+            lower.endsWith(".pptx") -> "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            lower.endsWith(".doc") -> "application/msword"
+            lower.endsWith(".docx") -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            lower.endsWith(".mp4") -> "video/mp4"
+            lower.endsWith(".webm") -> "video/webm"
+            lower.endsWith(".mkv") -> "video/x-matroska"
             lower.endsWith(".zip") -> "application/zip"
             lower.endsWith(".md") -> "text/markdown"
             else -> "application/octet-stream"

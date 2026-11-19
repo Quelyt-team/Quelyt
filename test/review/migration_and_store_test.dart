@@ -174,8 +174,8 @@ void main() {
     addTearDown(() {
       if (!closedFirst) store.dispose();
     });
-    expect(store.schemaVersion, 10);
-    expect(store.backupPaths.last, contains('.v9-backup-'));
+    expect(store.schemaVersion, 11);
+    expect(store.backupPaths.last, contains('.v10-backup-'));
 
     final repo = ReviewRepository(store);
     // All 229 unresolved lessonAttempt records migrated without 200-row cap.
@@ -208,7 +208,7 @@ void main() {
     final reopened = LocalStore.open(tempDir.path);
     addTearDown(reopened.dispose);
     final repo2 = ReviewRepository(reopened);
-    expect(reopened.schemaVersion, 10);
+    expect(reopened.schemaVersion, 11);
     expect(repo2.getChecks(status: ReviewCheckStatus.open), hasLength(25));
     expect(
       repo2

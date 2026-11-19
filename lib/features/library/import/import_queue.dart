@@ -22,6 +22,7 @@ class ImportQueue extends ChangeNotifier {
     required this.repository,
     required this.onLibraryChanged,
     this.onNotice,
+    this.onImported,
   });
 
   final LocalStore store;
@@ -32,6 +33,7 @@ class ImportQueue extends ChangeNotifier {
   /// without the queue owning UI state.
   final VoidCallback onLibraryChanged;
   final void Function(String message)? onNotice;
+  final void Function(DocumentRecord)? onImported;
 
   static const _uuid = Uuid();
   static const int scanFileLimit = 4000;
@@ -208,7 +210,7 @@ class ImportQueue extends ChangeNotifier {
             : ImportItemStatus.unsupported,
         message: DocumentService.supportedExtensions.contains(extension)
             ? null
-            : '暂不支持 $extension 格式；支持 PDF、JPG 和 PNG。',
+            : '暂不支持 $extension 格式。可导入 ${DocumentService.supportedFormatsLabel}。',
       );
       items.add(item);
     }
@@ -448,6 +450,7 @@ class ImportQueue extends ChangeNotifier {
       item.bytesDone = item.bytesTotal;
       _persistItem(item);
       onLibraryChanged();
+      if (!commit.duplicate) onImported?.call(commit.record);
       _notify();
     } on _ImportTargetMissing {
       item.status = ImportItemStatus.failed;

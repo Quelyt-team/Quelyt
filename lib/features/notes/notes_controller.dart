@@ -276,6 +276,33 @@ class NotesController extends ChangeNotifier {
 
   void saveNow() => flushNow();
 
+  NoteRecord saveAnswer(
+    AnswerNoteDraft draft, {
+    Set<int>? sections,
+    String? targetNoteId,
+    int? expectedRevision,
+    String? operationKey,
+  }) {
+    final editingTarget = targetNoteId != null && selected?.id == targetNoteId;
+    final revision = selected?.revision;
+    if (editingTarget) {
+      flushNow();
+      if (dirty) throw const NotesException('请先处理笔记中的保存冲突。');
+    }
+    final note = repository.saveAnswer(
+      draft,
+      selected: sections,
+      targetNoteId: targetNoteId,
+      operationKey: operationKey,
+      expectedRevision: editingTarget && revision == expectedRevision
+          ? selected?.revision
+          : expectedRevision,
+    );
+    if (editingTarget) select(note.id, force: true);
+    reload();
+    return note;
+  }
+
   void loadRevisions(NoteRecord note) {}
 
   List<NoteRevision> revisions() =>

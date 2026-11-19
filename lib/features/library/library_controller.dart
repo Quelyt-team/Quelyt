@@ -46,13 +46,15 @@ class LibraryUndo {
 /// [StudyController], which keeps file management usable while the reader is
 /// closed and prevents a drag-and-drop action from starting a page render.
 class LibraryController extends ChangeNotifier {
-  LibraryController({required this.store, required this.documents})
+  LibraryController({required this.store, required this.documents,
+    void Function(DocumentRecord)? onImported})
     : repository = LibraryRepository(store) {
     queue = ImportQueue(
       store: store,
       documents: documents,
       repository: repository,
       onLibraryChanged: _reload,
+      onImported: onImported,
       onNotice: (message) {
         _notice = message;
         _notify();

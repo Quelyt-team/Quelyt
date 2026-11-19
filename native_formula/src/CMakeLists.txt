@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.14)
+project(quelyt_formula LANGUAGES CXX)
+add_library(quelyt_formula SHARED formula_worker.cpp)
+target_compile_features(quelyt_formula PRIVATE cxx_std_17)
+if(ANDROID)
+  target_link_libraries(quelyt_formula PRIVATE dl)
+endif()

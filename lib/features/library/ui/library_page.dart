@@ -11,6 +11,7 @@ import '../../../app_controller.dart';
 import '../../../core/models.dart';
 import '../../../services/file_reveal.dart';
 import '../../../services/platform_file_access.dart';
+import '../../../ui/shell/app_chrome.dart';
 import '../../../ui/shell/app_shell.dart';
 import '../../../ui/theme/tokens.dart';
 import '../../../ui/widgets/app_surfaces.dart';
@@ -150,15 +151,11 @@ class _LibraryPageState extends State<LibraryPage> {
       final currentIndex = currentId == null
           ? -1
           : visible.indexWhere((i) => i.entry.id == currentId);
-      final delta =
-          event.logicalKey == LogicalKeyboardKey.arrowDown ? 1 : -1;
+      final delta = event.logicalKey == LogicalKeyboardKey.arrowDown ? 1 : -1;
       final nextIndex = currentIndex < 0
           ? 0
           : (currentIndex + delta).clamp(0, visible.length - 1);
-      c.selectEntry(
-        visible[nextIndex].entry.id,
-        range: shift,
-      );
+      c.selectEntry(visible[nextIndex].entry.id, range: shift);
       return KeyEventResult.handled;
     }
     if (event.logicalKey == LogicalKeyboardKey.enter ||
@@ -330,9 +327,7 @@ class _LibraryPageState extends State<LibraryPage> {
     );
     if (tags == null) return;
     for (final id in documents) {
-      final current = {
-        ...?c.tagIdsByDocument[id],
-      };
+      final current = {...?c.tagIdsByDocument[id]};
       await c.assignTags(id, {...current, ...tags});
     }
   }
@@ -425,11 +420,8 @@ class _LibraryPageState extends State<LibraryPage> {
     final result = await showModalBottomSheet<LibraryFilter>(
       context: context,
       showDragHandle: true,
-      builder: (context) => _FilterSheet(
-        initial: c.filter,
-        formats: formats,
-        tags: c.tags,
-      ),
+      builder: (context) =>
+          _FilterSheet(initial: c.filter, formats: formats, tags: c.tags),
     );
     if (result != null) c.setFilter(result);
   }
@@ -460,10 +452,7 @@ class _LibraryPageState extends State<LibraryPage> {
             content: Text(notice),
             action: c.undo == null || !_noticeOffersUndo(notice)
                 ? null
-                : SnackBarAction(
-                    label: '撤销',
-                    onPressed: () => c.undoLast(),
-                  ),
+                : SnackBarAction(label: '撤销', onPressed: () => c.undoLast()),
           ),
         );
       }
@@ -489,11 +478,18 @@ class _LibraryPageState extends State<LibraryPage> {
               final maxWidth = constraints.maxWidth;
               final compact = maxWidth < 760;
               final isPhoneShell = !widget.showSidebarToggle;
-              final sidebarOpen = widget.showSidebarToggle && !widget.sidebarCollapsed;
+              final sidebarOpen =
+                  widget.showSidebarToggle && !widget.sidebarCollapsed;
+              final hasWindowChrome =
+                  widget.showWindowChrome &&
+                  AppChrome.isDesktopWindowChromeSupported &&
+                  !compact;
               final chromeReserved =
-                  (widget.showWindowChrome ? 138.0 : 0.0) +
-                  (!sidebarOpen ? 108.0 : 0.0);
-              final innerWidth = (maxWidth - chromeReserved).clamp(0.0, maxWidth);
+                  (hasWindowChrome ? 138.0 : 0.0) + (!sidebarOpen ? 92.0 : 0.0);
+              final innerWidth = (maxWidth - chromeReserved).clamp(
+                0.0,
+                maxWidth,
+              );
               final useInlineSearchBar = isPhoneShell || innerWidth < 430;
               final showInlineSearch =
                   widget.searchController != null &&
@@ -567,13 +563,16 @@ class _LibraryPageState extends State<LibraryPage> {
                                                       return FadeTransition(
                                                         opacity: curved,
                                                         child: SlideTransition(
-                                                          position: Tween<Offset>(
-                                                            begin: const Offset(
-                                                              0,
-                                                              0.18,
-                                                            ),
-                                                            end: Offset.zero,
-                                                          ).animate(curved),
+                                                          position:
+                                                              Tween<Offset>(
+                                                                begin:
+                                                                    const Offset(
+                                                                      0,
+                                                                      0.18,
+                                                                    ),
+                                                                end:
+                                                                    Offset.zero,
+                                                              ).animate(curved),
                                                           child: ScaleTransition(
                                                             scale:
                                                                 Tween<double>(
@@ -703,9 +702,7 @@ class _LibraryPageState extends State<LibraryPage> {
     final paths = droppedFilePaths(details.files);
     if (paths.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('拖入的项目没有可读取的本地路径；请改用“选择文件/文件夹”。'),
-        ),
+        const SnackBar(content: Text('拖入的项目没有可读取的本地路径；请改用“选择文件/文件夹”。')),
       );
       return;
     }
@@ -714,9 +711,7 @@ class _LibraryPageState extends State<LibraryPage> {
 
   Future<void> _saveSmartFolder() async {
     if (!c.hasSearchConditions || c.activeSmartFolder != null) return;
-    final suggested = c.query.trim().isNotEmpty
-        ? c.query.trim()
-        : '筛选资料';
+    final suggested = c.query.trim().isNotEmpty ? c.query.trim() : '筛选资料';
     final name = await showLibraryTextDialog(
       context,
       title: '保存为智能文件夹',
@@ -1286,7 +1281,8 @@ class _LibraryPageState extends State<LibraryPage> {
     };
 
     if (isPhoneShell) {
-      final activeLabel = scope == LibraryScope.folder && c.breadcrumb.isNotEmpty
+      final activeLabel =
+          scope == LibraryScope.folder && c.breadcrumb.isNotEmpty
           ? c.breadcrumb.last.name
           : scopeLabel;
       if (scope == LibraryScope.all) {
@@ -1360,11 +1356,7 @@ class _LibraryPageState extends State<LibraryPage> {
         crumbs.add(
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 2),
-            child: QIcon(
-              QIcons.chevronRight,
-              size: 10,
-              color: colors.inkMuted,
-            ),
+            child: QIcon(QIcons.chevronRight, size: 10, color: colors.inkMuted),
           ),
         );
         crumbs.add(
@@ -1493,11 +1485,7 @@ class _LibraryPageState extends State<LibraryPage> {
               c.searchScope.label,
               style: context.texts.bodySmall!.copyWith(fontSize: 11.5),
             ),
-            QIcon(
-              QIcons.chevronDown,
-              size: 10,
-              color: colors.inkMuted,
-            ),
+            QIcon(QIcons.chevronDown, size: 10, color: colors.inkMuted),
           ],
         ),
       ),
@@ -1643,9 +1631,7 @@ class _LibraryPageState extends State<LibraryPage> {
     if (c.counts.all == 0 && c.folders.isEmpty && c.query.trim().isEmpty) {
       return _emptyLibrary(compact);
     }
-    if (c.activeSmartFolder != null &&
-        items.isEmpty &&
-        hits.isEmpty) {
+    if (c.activeSmartFolder != null && items.isEmpty && hits.isEmpty) {
       return Center(
         child: EmptyState(
           compact: true,
@@ -1690,9 +1676,7 @@ class _LibraryPageState extends State<LibraryPage> {
       controller: _scrollController,
       slivers: [
         if (showFolderTiles)
-          SliverToBoxAdapter(
-            child: _folderSection(childFolders, compact),
-          ),
+          SliverToBoxAdapter(child: _folderSection(childFolders, compact)),
         if (items.isNotEmpty)
           SliverToBoxAdapter(
             child: Padding(
@@ -1716,9 +1700,7 @@ class _LibraryPageState extends State<LibraryPage> {
               ),
             ),
           ),
-        if (items.isNotEmpty &&
-            c.view.layout == LibraryLayout.list &&
-            !compact)
+        if (items.isNotEmpty && c.view.layout == LibraryLayout.list && !compact)
           SliverToBoxAdapter(child: _listHeader()),
         if (items.isNotEmpty)
           c.view.layout == LibraryLayout.list
@@ -1747,9 +1729,7 @@ class _LibraryPageState extends State<LibraryPage> {
                   ),
                 ),
         if (hits.isNotEmpty) _fullTextSection(hits, compact),
-        SliverToBoxAdapter(
-          child: SizedBox(height: c.hasSelection ? 84 : 28),
-        ),
+        SliverToBoxAdapter(child: SizedBox(height: c.hasSelection ? 84 : 28)),
       ],
     );
   }
@@ -1895,12 +1875,11 @@ class _LibraryPageState extends State<LibraryPage> {
   Widget _listHeader() {
     final columns = c.view.columns;
     final colors = context.colors;
-    TextStyle style({bool active = false}) =>
-        context.texts.bodySmall!.copyWith(
-          fontSize: 12,
-          color: active ? colors.ink : colors.inkMuted,
-          fontWeight: active ? FontWeight.w600 : FontWeight.w500,
-        );
+    TextStyle style({bool active = false}) => context.texts.bodySmall!.copyWith(
+      fontSize: 12,
+      color: active ? colors.ink : colors.inkMuted,
+      fontWeight: active ? FontWeight.w600 : FontWeight.w500,
+    );
 
     Widget sortableHeader(String label, LibrarySortField field) {
       final active = c.view.sortField == field;
@@ -2065,9 +2044,8 @@ class _LibraryPageState extends State<LibraryPage> {
       c.selectEntry(c.detailItem!.entry.id);
     }
     if (!c.hasSelection) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('先选择要导出的资料或文件夹。')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('先选择要导出的资料或文件夹。')));
       return;
     }
     if (!FileReveal.canOpenFolder &&
@@ -2201,23 +2179,13 @@ class _LibraryPageState extends State<LibraryPage> {
       iconAction('加标签', _tagSelection, icon: QIcons.tag);
       iconAction('星标', _toggleStarSelection, icon: QIcons.star);
       iconAction('导出', _exportSelection, icon: QIcons.download);
-      iconAction(
-        '移入回收站',
-        _trashSelection,
-        icon: QIcons.trash,
-        danger: true,
-      );
+      iconAction('移入回收站', _trashSelection, icon: QIcons.trash, danger: true);
     } else {
       textAction('移动到', _moveSelection, icon: QIcons.move);
       textAction('加标签', _tagSelection, icon: QIcons.tag);
       textAction('星标', _toggleStarSelection, icon: QIcons.star);
       textAction('导出', _exportSelection, icon: QIcons.download);
-      textAction(
-        '移入回收站',
-        _trashSelection,
-        icon: QIcons.trash,
-        danger: true,
-      );
+      textAction('移入回收站', _trashSelection, icon: QIcons.trash, danger: true);
     }
     return Container(
       key: const ValueKey('library-selection-bar'),
@@ -2334,6 +2302,7 @@ class _LibraryPageState extends State<LibraryPage> {
                         c.setLearningMode(item.document.id, mode),
                     onOpenNote: widget.onOpenNote,
                     onCreateNote: widget.onCreateNoteForDocument,
+                    onOpenRelated: widget.onOpenDocument,
                   ),
           ),
         ),
@@ -2362,9 +2331,8 @@ class _LibraryPageState extends State<LibraryPage> {
       }
     }
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('这批导入没有可打开的新资料。')),
-    );
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('这批导入没有可打开的新资料。')));
   }
 
   Widget _queueBar(bool compact) {
@@ -2375,11 +2343,11 @@ class _LibraryPageState extends State<LibraryPage> {
     final target = latest == null ? '未归档' : _queueTargetLabel(latest);
     final text = active
         ? '导入中 → $target：${latest?.finished ?? 0}/${latest?.total ?? 0}'
-            '${(latest?.existing ?? 0) > 0 ? ' · 已存在 ${latest!.existing}' : ''}'
-            '${(latest?.failed ?? 0) > 0 ? ' · 失败 ${latest!.failed}' : ''}'
+              '${(latest?.existing ?? 0) > 0 ? ' · 已存在 ${latest!.existing}' : ''}'
+              '${(latest?.failed ?? 0) > 0 ? ' · 失败 ${latest!.failed}' : ''}'
         : '导入到 → $target：新 ${queue.importedCount} · 已存在 '
-            '${queue.existingCount}'
-            '${queue.failedCount > 0 ? ' · 失败 ${queue.failedCount}' : ''}';
+              '${queue.existingCount}'
+              '${queue.failedCount > 0 ? ' · 失败 ${queue.failedCount}' : ''}';
     return Container(
       height: 38,
       padding: const EdgeInsets.only(left: 16, right: 8),
@@ -2415,10 +2383,7 @@ class _LibraryPageState extends State<LibraryPage> {
             child: const Text('查看队列'),
           ),
           if (!active)
-            TextButton(
-              onPressed: _openLatestImport,
-              child: const Text('打开'),
-            ),
+            TextButton(onPressed: _openLatestImport, child: const Text('打开')),
           if (!active)
             IconButton(
               tooltip: '清理导入记录',
@@ -2452,7 +2417,12 @@ class _LibraryPageState extends State<LibraryPage> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: EdgeInsets.fromLTRB(compact ? 12 : 20, 10, compact ? 8 : 16, 4),
+          padding: EdgeInsets.fromLTRB(
+            compact ? 12 : 20,
+            10,
+            compact ? 8 : 16,
+            4,
+          ),
           child: Row(
             children: [
               Expanded(
@@ -2470,7 +2440,8 @@ class _LibraryPageState extends State<LibraryPage> {
                     final confirmed = await showLibraryConfirmDialog(
                       context,
                       title: '清空回收站？',
-                      message: '回收站内的资料、笔记与会话将被永久删除且不可撤销；'
+                      message:
+                          '回收站内的资料、笔记与会话将被永久删除且不可撤销；'
                           '外部原文件与独立学习记录不受影响。',
                       confirmLabel: '永久清空',
                       danger: true,
@@ -2492,9 +2463,7 @@ class _LibraryPageState extends State<LibraryPage> {
                     compact: true,
                     icon: QIcons.trash,
                     title: query.isEmpty ? '回收站是空的' : '没有匹配的回收站项目',
-                    message: query.isEmpty
-                        ? '删除的资料会先放在这里。'
-                        : '换一个词试试。',
+                    message: query.isEmpty ? '删除的资料会先放在这里。' : '换一个词试试。',
                   ),
                 )
               : ListView.builder(
@@ -2529,16 +2498,12 @@ class _LibraryPageState extends State<LibraryPage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              QIcon(
-                QIcons.library,
-                size: 40,
-                color: context.colors.inkMuted,
-              ),
+              QIcon(QIcons.library, size: 40, color: context.colors.inkMuted),
               const SizedBox(height: 14),
               Text('书库为空', style: context.texts.headlineSmall),
               const SizedBox(height: 6),
               Text(
-                '拖入 PDF 或图片，或从本地选择文件/文件夹。',
+                '拖入文档、图片、课件或视频，或从本地选择文件和文件夹。',
                 textAlign: TextAlign.center,
                 style: context.texts.bodySmall!.copyWith(height: 1.6),
               ),
@@ -2564,11 +2529,6 @@ class _LibraryPageState extends State<LibraryPage> {
                     label: const Text('新建文件夹'),
                   ),
                 ],
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'PDF · JPG · PNG',
-                style: context.texts.bodySmall!.copyWith(fontSize: 12),
               ),
             ],
           ),
@@ -2645,20 +2605,17 @@ class _FolderCrumbTarget extends StatelessWidget {
         if (details.data.isEmpty) return false;
         for (final id in details.data.folderIds) {
           if (id == folderId ||
-              controller.descendantFolderIds(id).contains(
-                folderId,
-              )) {
+              controller.descendantFolderIds(id).contains(folderId)) {
             return false;
           }
         }
         return true;
       },
-      onAcceptWithDetails: (details) =>
-          controller.moveNodes(
-            folderIds: details.data.folderIds,
-            entryIds: details.data.entryIds,
-            targetFolderId: folderId,
-          ),
+      onAcceptWithDetails: (details) => controller.moveNodes(
+        folderIds: details.data.folderIds,
+        entryIds: details.data.entryIds,
+        targetFolderId: folderId,
+      ),
       builder: (context, candidates, rejected) => Container(
         decoration: candidates.isEmpty
             ? null
@@ -2722,7 +2679,9 @@ class _FolderTileState extends State<_FolderTile> {
                 ? colors.surfaceRaised
                 : colors.surface,
             border: Border.all(
-              color: _highlight || _hovered ? colors.outlineStrong : colors.outline,
+              color: _highlight || _hovered
+                  ? colors.outlineStrong
+                  : colors.outline,
             ),
             borderRadius: BorderRadius.circular(Radii.md),
           ),
@@ -2760,11 +2719,7 @@ class _FolderTileState extends State<_FolderTile> {
                     minHeight: 24,
                   ),
                   padding: EdgeInsets.zero,
-                  icon: QIcon(
-                    QIcons.palette,
-                    size: 15,
-                    color: colors.inkMuted,
-                  ),
+                  icon: QIcon(QIcons.palette, size: 15, color: colors.inkMuted),
                 ),
             ],
           ),
@@ -2988,12 +2943,9 @@ class _LibraryListRowState extends State<_LibraryListRow> {
         if (!widget.compact && columns.format)
           SizedBox(
             width: 72,
-            child: Text(
-              formatLabel(document.format),
-              style: context.texts.bodySmall!.copyWith(
-                fontSize: 12,
-                color: colors.inkMuted,
-              ),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: DocumentFormatTag.forDocument(document, compact: true),
             ),
           ),
         if (widget.compact || columns.status)
@@ -3012,30 +2964,34 @@ class _LibraryListRowState extends State<_LibraryListRow> {
         if (!widget.compact && columns.progress)
           SizedBox(
             width: 92,
-            child: Row(
-              children: [
-                Expanded(
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(2),
-                    child: LinearProgressIndicator(
-                      value: progress.hasPages ? progress.ratio : percent / 100,
-                      minHeight: 3,
-                      backgroundColor: colors.tint,
-                      color: colors.ink,
-                    ),
+            child: document.isVideo
+                ? null
+                : Row(
+                    children: [
+                      Expanded(
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(2),
+                          child: LinearProgressIndicator(
+                            value: progress.hasPages
+                                ? progress.ratio
+                                : percent / 100,
+                            minHeight: 3,
+                            backgroundColor: colors.tint,
+                            color: colors.ink,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        '$percent%',
+                        style: context.texts.bodySmall!.copyWith(
+                          fontSize: 12,
+                          color: colors.inkMuted,
+                          fontFeatures: AppNumerals.tabular,
+                        ),
+                      ),
+                    ],
                   ),
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  '$percent%',
-                  style: context.texts.bodySmall!.copyWith(
-                    fontSize: 12,
-                    color: colors.inkMuted,
-                    fontFeatures: AppNumerals.tabular,
-                  ),
-                ),
-              ],
-            ),
           ),
       ],
     );
@@ -3069,7 +3025,7 @@ class _LibraryListRowState extends State<_LibraryListRow> {
                   data: widget.dragPayload,
                   feedback: LibraryDragFeedback(
                     label: widget.dragPayload.label,
-                    icon: QIcons.page,
+                    icon: documentIcon(documentFormat(document)),
                   ),
                   childWhenDragging: Opacity(opacity: .4, child: content),
                   child: content,
@@ -3094,57 +3050,13 @@ class _LibraryListRowState extends State<_LibraryListRow> {
     return folder;
   }
 
-  Widget _formatGlyph(DocumentRecord document, {required bool isShortcut}) {
-    final colors = context.colors;
-    return SizedBox(
-      width: 28,
-      height: 28,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          Container(
-            width: 28,
-            height: 28,
-            decoration: BoxDecoration(
-              color: colors.surfaceRaised,
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Center(
-              child: QIcon(
-                documentIcon(document.format),
-                size: 15,
-                color: colors.inkMuted,
-              ),
-            ),
-          ),
-          if (isShortcut)
-            Positioned(
-              right: -2,
-              bottom: -2,
-              child: Tooltip(
-                message: '快捷方式：共享原资料',
-                child: Container(
-                  width: 13,
-                  height: 13,
-                  decoration: BoxDecoration(
-                    color: colors.surface,
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: colors.outline),
-                  ),
-                  child: Center(
-                    child: QIcon(
-                      QIcons.shortcut,
-                      size: 9,
-                      color: colors.inkMuted,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
+  Widget _formatGlyph(DocumentRecord document, {required bool isShortcut}) =>
+      DocumentFormatIcon.forDocument(
+        document,
+        size: 30,
+        iconSize: 16,
+        isShortcut: isShortcut,
+      );
 }
 
 class _LibraryGridCard extends StatefulWidget {
@@ -3217,8 +3129,7 @@ class _LibraryGridCardState extends State<_LibraryGridCard> {
                     iconSize: 17,
                   ),
                   const Spacer(),
-                  if (item.isShortcut)
-                    const QIcon(QIcons.shortcut, size: 13),
+                  if (item.isShortcut) const QIcon(QIcons.shortcut, size: 13),
                   if (document.starred)
                     Padding(
                       padding: const EdgeInsets.only(left: 4),
@@ -3248,16 +3159,12 @@ class _LibraryGridCardState extends State<_LibraryGridCard> {
               const SizedBox(height: 6),
               Row(
                 children: [
-                  Text(
-                    formatLabel(document.format),
-                    style: context.texts.bodySmall!.copyWith(
-                      fontSize: 12,
-                      color: colors.inkMuted,
-                    ),
-                  ),
+                  DocumentFormatTag.forDocument(document, compact: true),
                   const Spacer(),
                   Text(
-                    '${document.currentPage}/${document.pageCount}',
+                    document.isVideo
+                        ? '视频'
+                        : '${document.currentPage}/${document.pageCount}',
                     style: context.texts.bodySmall!.copyWith(
                       fontSize: 12,
                       color: colors.inkMuted,
@@ -3467,11 +3374,7 @@ class _TrashBatchCard extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(18, 3, 16, 3),
               child: Row(
                 children: [
-                  QIcon(
-                    QIcons.folder,
-                    size: 13,
-                    color: colors.inkMuted,
-                  ),
+                  QIcon(QIcons.folder, size: 13, color: colors.inkMuted),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -3493,10 +3396,10 @@ class _TrashBatchCard extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(18, 5, 8, 5),
               child: Row(
                 children: [
-                  QIcon(
-                    documentIcon(item.document.format),
-                    size: 13,
-                    color: colors.inkMuted,
+                  DocumentFormatIcon.forDocument(
+                    item.document,
+                    size: 22,
+                    iconSize: 13,
                   ),
                   const SizedBox(width: 8),
                   Expanded(
@@ -3626,14 +3529,25 @@ class _FilterSheetState extends State<_FilterSheet> {
               const SizedBox(height: 6),
               Wrap(
                 spacing: 6,
+                runSpacing: 6,
                 children: [
                   for (final format in widget.formats)
-                    FilterChip(
-                      label: Text(format.toUpperCase()),
-                      selected: _filter.formats.contains(format),
-                      onSelected: (_) => setState(() {
-                        _filter = _filter.toggleFormat(format);
-                      }),
+                    Builder(
+                      builder: (context) {
+                        final visual = documentFormatVisual(context, format);
+                        return FilterChip(
+                          avatar: QIcon(
+                            visual.icon,
+                            size: 15,
+                            color: visual.ink,
+                          ),
+                          label: Text(visual.label),
+                          selected: _filter.formats.contains(format),
+                          onSelected: (_) => setState(() {
+                            _filter = _filter.toggleFormat(format);
+                          }),
+                        );
+                      },
                     ),
                 ],
               ),
@@ -3818,9 +3732,7 @@ class _LibrarySearchFieldState extends State<_LibrarySearchField> {
         decoration: BoxDecoration(
           color: c.sidebar,
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: _focused ? c.outlineStrong : c.outline,
-          ),
+          border: Border.all(color: _focused ? c.outlineStrong : c.outline),
         ),
         child: Row(
           children: [

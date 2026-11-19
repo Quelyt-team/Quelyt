@@ -47,6 +47,13 @@
                 <data android:mimeType="application/pdf"/>
                 <data android:mimeType="image/jpeg"/>
                 <data android:mimeType="image/png"/>
+                <data android:mimeType="application/vnd.ms-powerpoint"/>
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.presentationml.presentation"/>
+                <data android:mimeType="application/msword"/>
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document"/>
+                <data android:mimeType="video/mp4"/>
+                <data android:mimeType="video/webm"/>
+                <data android:mimeType="video/x-matroska"/>
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.SEND"/>
@@ -54,6 +61,13 @@
                 <data android:mimeType="application/pdf"/>
                 <data android:mimeType="image/jpeg"/>
                 <data android:mimeType="image/png"/>
+                <data android:mimeType="application/vnd.ms-powerpoint"/>
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.presentationml.presentation"/>
+                <data android:mimeType="application/msword"/>
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document"/>
+                <data android:mimeType="video/mp4"/>
+                <data android:mimeType="video/webm"/>
+                <data android:mimeType="video/x-matroska"/>
                 <data android:mimeType="image/*"/>
             </intent-filter>
             <intent-filter>
@@ -62,6 +76,13 @@
                 <data android:mimeType="application/pdf"/>
                 <data android:mimeType="image/jpeg"/>
                 <data android:mimeType="image/png"/>
+                <data android:mimeType="application/vnd.ms-powerpoint"/>
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.presentationml.presentation"/>
+                <data android:mimeType="application/msword"/>
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document"/>
+                <data android:mimeType="video/mp4"/>
+                <data android:mimeType="video/webm"/>
+                <data android:mimeType="video/x-matroska"/>
                 <data android:mimeType="image/*"/>
             </intent-filter>
         </activity>

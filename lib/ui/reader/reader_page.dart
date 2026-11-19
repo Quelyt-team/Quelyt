@@ -1,4 +1,4 @@
-﻿import 'dart:math' as math;
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -6,6 +6,8 @@ import 'package:flutter/services.dart';
 import '../../app_controller.dart';
 import '../../core/models.dart';
 import '../../features/book_qa/book_qa_controller.dart';
+import '../../features/materials/ui/material_workspace.dart';
+import '../../features/notes/notes_controller.dart';
 import '../../services/ai_gateway.dart';
 import '../dialogs/app_dialogs.dart';
 import '../learning_panel.dart';
@@ -32,6 +34,8 @@ class ReaderPage extends StatefulWidget {
     required this.onJump,
     required this.bookQa,
     this.onOpenNoteInWorkspace,
+    this.notesController,
+    this.sourceEntryId,
     this.showRail = false,
     this.showWindowChrome = false,
     this.openPanelOnStart = false,
@@ -47,6 +51,8 @@ class ReaderPage extends StatefulWidget {
   final Future<void> Function(Evidence) onJump;
   final BookQaController bookQa;
   final ValueChanged<String>? onOpenNoteInWorkspace;
+  final NotesController? notesController;
+  final String? sourceEntryId;
   final bool showRail;
   final bool showWindowChrome;
   final bool openPanelOnStart;
@@ -72,6 +78,11 @@ class ReaderPageState extends State<ReaderPage>
   _ReaderMode _mode = _ReaderMode.desktop;
 
   StudyController get c => widget.controller;
+
+  bool get _hasWindowChrome =>
+      widget.showWindowChrome &&
+      AppChrome.isDesktopWindowChromeSupported &&
+      _mode != _ReaderMode.compact;
 
   /// Closes active transient overlays (compact bottom sheet, medium drawer, or
   /// active page selection) before leaving the reader.
@@ -107,14 +118,13 @@ class ReaderPageState extends State<ReaderPage>
     super.dispose();
   }
 
-  void _toast(String message) =>
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(message),
-          behavior: SnackBarBehavior.floating,
-          margin: const EdgeInsets.fromLTRB(16, 0, 16, 104),
-        ),
-      );
+  void _toast(String message) => ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Text(message),
+      behavior: SnackBarBehavior.floating,
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 104),
+    ),
+  );
 
   bool get _typing {
     final focus = FocusManager.instance.primaryFocus;
@@ -148,7 +158,15 @@ class ReaderPageState extends State<ReaderPage>
 
   /// Opening a dock item; clicking the active item again closes the panel.
   void _selectLearningTab(int index) {
-    final closing = _panelActive && _tabs.index == index;
+    final wasActive = _panelActive;
+    final closing = wasActive && _tabs.index == index;
+    if (!closing) {
+      if (!wasActive) {
+        _tabs.index = index;
+      } else {
+        _tabs.animateTo(index);
+      }
+    }
     setState(() {
       switch (_mode) {
         case _ReaderMode.desktop:
@@ -156,24 +174,36 @@ class ReaderPageState extends State<ReaderPage>
         case _ReaderMode.medium:
           _drawerOpen = !closing;
         case _ReaderMode.compact:
-          _sheetFraction = closing ? _collapsedFraction : .5;
+          if (closing) {
+            _sheetFraction = _collapsedFraction;
+          } else if (!_sheetExpanded) {
+            _sheetFraction = .5;
+          }
       }
     });
-    if (!closing) _tabs.animateTo(index);
   }
 
   Widget _learningDock({required bool vertical, bool floating = false}) =>
       AnimatedBuilder(
-        animation: _tabs,
-        builder: (context, _) => LearningDock(
-          kind: c.current!.kind,
-          selectedIndex: _panelActive ? _tabs.index : null,
-          replyCount: c.replies.length,
-          noteCount: c.notes.length,
-          onSelect: _selectLearningTab,
-          vertical: vertical,
-          floating: floating,
-        ),
+        animation: Listenable.merge([_tabs, widget.bookQa]),
+        builder: (context, _) {
+          final kind = c.current!.kind;
+          final useBookQa = const {
+            DocumentKind.textbook,
+            DocumentKind.paper,
+          }.contains(kind);
+          final replyCount =
+              useBookQa ? widget.bookQa.turns.length : c.replies.length;
+          return LearningDock(
+            kind: kind,
+            selectedIndex: _panelActive ? _tabs.index : null,
+            replyCount: replyCount,
+            noteCount: c.notes.length,
+            onSelect: _selectLearningTab,
+            vertical: vertical,
+            floating: floating,
+          );
+        },
       );
 
   Future<void> _jump(Evidence evidence) async {
@@ -229,6 +259,21 @@ class ReaderPageState extends State<ReaderPage>
   }
 
   void _toggleSelecting() => _pageKey.currentState?.toggleSelecting();
+
+  void _openMaterialTools() {
+    final document = c.current;
+    if (document == null || c.opened == null) return;
+    showDialog<void>(
+      context: context,
+      builder: (_) => MaterialWorkspace(
+        study: c,
+        document: document,
+        notes: widget.notesController,
+        openNote: widget.onOpenNoteInWorkspace,
+        entryId: widget.sourceEntryId,
+      ),
+    );
+  }
 
   void _fit() => _pageKey.currentState?.fit();
 
@@ -317,11 +362,11 @@ class ReaderPageState extends State<ReaderPage>
                     body,
                     if (_mode != _ReaderMode.compact)
                       Positioned(
-                        left: 16,
+                        left: 14,
                         top: 64,
                         child: _learningDock(vertical: true, floating: true),
                       ),
-                    if (widget.showWindowChrome)
+                    if (_hasWindowChrome)
                       const Positioned(
                         top: 0,
                         right: 0,
@@ -370,7 +415,7 @@ class ReaderPageState extends State<ReaderPage>
                     ),
                   ),
                   child: _panel(
-                    trailing: widget.showWindowChrome
+                    trailing: _hasWindowChrome
                         ? const SizedBox(width: AppChrome.captionWidth)
                         : null,
                   ),
@@ -409,34 +454,55 @@ class ReaderPageState extends State<ReaderPage>
             ),
             child: Column(
               children: [
-                Container(
-                  height: AppChrome.titleBarHeight,
-                  padding: const EdgeInsets.fromLTRB(Space.lg, 0, Space.sm, 0),
-                  child: Row(
-                    children: [
-                      AccentIcon(
-                        icon: QIcons.study,
-                        accent: context.colors.blueAccent,
-                        size: 28,
-                        iconSize: IconSizes.sm,
+                AnimatedBuilder(
+                  animation: _tabs,
+                  builder: (context, _) {
+                    final (icon, title) = switch (_tabs.index) {
+                      1 => (QIcons.qa, '问答'),
+                      2 => (QIcons.notes, '笔记'),
+                      _ => switch (document.kind) {
+                        DocumentKind.textbook => (QIcons.textbook, '教材学习面板'),
+                        DocumentKind.paper => (QIcons.paper, '论文精读面板'),
+                        DocumentKind.exercise => (QIcons.review, '试题工具'),
+                        DocumentKind.video => (QIcons.study, '视频学习'),
+                        DocumentKind.unspecified => (QIcons.study, '阅读与问答面板'),
+                      },
+                    };
+                    return Container(
+                      height: AppChrome.titleBarHeight,
+                      padding: const EdgeInsets.fromLTRB(
+                        Space.lg,
+                        0,
+                        Space.sm,
+                        0,
                       ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          switch (document.kind) {
-                            DocumentKind.textbook => '教材学习面板',
-                            DocumentKind.paper => '论文精读面板',
-                            DocumentKind.unspecified => '阅读与问答面板',
-                          },
-                          style: context.texts.titleSmall!.copyWith(
-                            fontSize: 14.5,
+                      child: Row(
+                        children: [
+                          AccentIcon(
+                            icon: icon,
+                            accent: context.colors.blueAccent,
+                            size: 28,
+                            iconSize: IconSizes.sm,
                           ),
-                        ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: context.texts.titleSmall!.copyWith(
+                                fontSize: 14.5,
+                              ),
+                            ),
+                          ),
+                          if (_tabs.index == 0)
+                            _modeSwitcherMenu(document.kind),
+                          if (_hasWindowChrome)
+                            const SizedBox(width: AppChrome.captionWidth),
+                        ],
                       ),
-                      if (widget.showWindowChrome)
-                        const SizedBox(width: AppChrome.captionWidth),
-                    ],
-                  ),
+                    );
+                  },
                 ),
                 Divider(height: 1, color: context.colors.outline),
                 Expanded(child: _panel(showHeader: false)),
@@ -461,17 +527,18 @@ class ReaderPageState extends State<ReaderPage>
         .toDouble();
     final expanded = fraction > collapsedFraction + .01;
     final height = math.max(collapsed, available * fraction);
-    return Column(
-      children: [
-        Expanded(child: _pageColumn(document)),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: _learningDock(vertical: false, floating: true),
+    return ColoredBox(
+      color: context.colors.pageStage,
+      child: Column(
+        children: [
+          Expanded(child: _pageColumn(document)),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
+            child: Center(
+              child: _learningDock(vertical: false, floating: true),
+            ),
           ),
-        ),
-        AnimatedContainer(
+          AnimatedContainer(
           duration: _draggingSheet
               ? Duration.zero
               : context.motion(Motion.slow),
@@ -541,11 +608,25 @@ class ReaderPageState extends State<ReaderPage>
                     Expanded(
                       child: LayoutBuilder(
                         builder: (context, inner) {
-                          // Only enforce a floor during active dragging so the
-                          // sheet header/panel stays readable without hiding the
-                          // composer behind OverflowBox when the IME shrinks height.
-                          final minFloor = _draggingSheet ? 220.0 : 0.0;
-                          final layoutHeight = math.max(inner.maxHeight, minFloor);
+                          // Keep a stable layout height during sheet drag and
+                          // expand animations so inner flex layouts never
+                          // overflow while height interpolates from 0, while
+                          // still allowing the IME to shrink the panel.
+                          final imeOpen =
+                              MediaQuery.viewInsetsOf(context).bottom > 0;
+                          final targetInner = math.max(
+                            0.0,
+                            height - collapsed - 2,
+                          );
+                          final minFloor = _draggingSheet
+                              ? 220.0
+                              : (!imeOpen && inner.maxHeight < targetInner - 1)
+                              ? targetInner
+                              : 0.0;
+                          final layoutHeight = math.max(
+                            inner.maxHeight,
+                            minFloor,
+                          );
                           return ClipRect(
                             child: OverflowBox(
                               alignment: Alignment.topCenter,
@@ -566,8 +647,24 @@ class ReaderPageState extends State<ReaderPage>
           ),
         ),
       ],
+      ),
     );
   }
+
+  Widget _modeSwitcherMenu(DocumentKind kind) => PopupMenuButton<DocumentKind>(
+    tooltip: '切换学习方式',
+    padding: EdgeInsets.zero,
+    icon: const QIcon(QIcons.more, size: IconSizes.sm),
+    onSelected: c.setLearningMode,
+    itemBuilder: (context) => [
+      for (final mode in DocumentKindX.pageModes)
+        CheckedPopupMenuItem(
+          value: mode,
+          checked: kind == mode,
+          child: Text(mode.label),
+        ),
+    ],
+  );
 
   Widget _sheetHeader(DocumentRecord document, bool expanded) {
     final colors = context.colors;
@@ -578,49 +675,71 @@ class ReaderPageState extends State<ReaderPage>
       'feedback' => '第 3 步 · 核对反馈',
       _ => session == null ? '尚未设定这一节' : '第 1 步 · 阅读',
     };
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(Space.lg, 6, Space.lg, 6),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Container(
-            width: 36,
-            height: 4,
-            decoration: BoxDecoration(
-              color: colors.outlineStrong,
-              borderRadius: BorderRadius.circular(Radii.full),
-            ),
-          ),
-          const SizedBox(height: 7),
-          Row(
+    return AnimatedBuilder(
+      animation: _tabs,
+      builder: (context, _) {
+        final tabIndex = expanded ? _tabs.index : 0;
+        final (icon, title) = switch (tabIndex) {
+          1 => (QIcons.qa, '问答'),
+          2 => (QIcons.notes, '笔记'),
+          _ => switch (document.kind) {
+            DocumentKind.textbook => (QIcons.study, '学习面板 · $step'),
+            DocumentKind.paper => (QIcons.paper, '论文精读 · $step'),
+            DocumentKind.exercise => (QIcons.review, '试题工具 · 求解与整理'),
+            DocumentKind.video => (QIcons.study, '视频学习'),
+            DocumentKind.unspecified => (QIcons.study, '阅读与问答 · $step'),
+          },
+        };
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(Space.lg, 6, Space.sm, 6),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              QIcon(QIcons.study, size: IconSizes.sm, color: colors.primary),
-              const SizedBox(width: 7),
-              Expanded(
-                child: Text(
-                  switch (document.kind) {
-                    DocumentKind.textbook => '学习面板 · $step',
-                    DocumentKind.paper => '论文精读 · $step',
-                    DocumentKind.unspecified => '阅读与问答 · $step',
-                  },
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: context.texts.bodySmall!.copyWith(
-                    fontSize: 13,
-                    color: colors.ink,
-                    fontWeight: FontWeight.w600,
-                  ),
+              Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: colors.outlineStrong,
+                  borderRadius: BorderRadius.circular(Radii.full),
                 ),
               ),
-              QIcon(
-                expanded ? QIcons.chevronDown : QIcons.chevronUp,
-                size: IconSizes.md,
-                color: colors.inkMuted,
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  QIcon(icon, size: IconSizes.sm, color: colors.primary),
+                  const SizedBox(width: 7),
+                  Expanded(
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: context.texts.bodySmall!.copyWith(
+                        fontSize: 13,
+                        color: colors.ink,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  if (expanded && tabIndex == 0)
+                    SizedBox(
+                      width: 32,
+                      height: 32,
+                      child: _modeSwitcherMenu(document.kind),
+                    ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    child: QIcon(
+                      expanded ? QIcons.chevronDown : QIcons.chevronUp,
+                      size: IconSizes.md,
+                      color: colors.inkMuted,
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -635,10 +754,13 @@ class ReaderPageState extends State<ReaderPage>
     onNote: _addNote,
     onJump: _jump,
     onOpenNoteInWorkspace: widget.onOpenNoteInWorkspace,
+    notesController: widget.notesController,
     bookQa: widget.bookQa,
     trailing: trailing,
     tabController: _tabs,
     showHeader: showHeader,
+    sourceEntryId: widget.sourceEntryId,
+    onOpenMaterialTools: c.opened != null ? _openMaterialTools : null,
     onExpanded: () {
       if (_mode == _ReaderMode.compact) {
         setState(() => _sheetFraction = .5);
@@ -653,6 +775,20 @@ class ReaderPageState extends State<ReaderPage>
     return Column(
       children: [
         _toolbar(document),
+        if (document.usesConvertedPreview && document.conversionIssue != null)
+          Padding(
+            padding: const EdgeInsets.all(Space.sm),
+            child: AppCallout(
+              tone: CalloutTone.warning,
+              message: document.conversionIssue!,
+              action: c.opened == null && !c.loading
+                  ? TextButton(
+                      onPressed: c.retrySlides,
+                      child: const Text('重试转换'),
+                    )
+                  : null,
+            ),
+          ),
         if (c.error != null)
           Padding(
             padding: const EdgeInsets.fromLTRB(Space.md, Space.sm, Space.md, 0),
@@ -671,7 +807,11 @@ class ReaderPageState extends State<ReaderPage>
         Expanded(
           child: ColoredBox(
             color: context.colors.pageStage,
-            child: c.raster == null
+            child: document.usesConvertedPreview && c.opened == null && !c.loading
+                ? Center(
+                    child: Text(document.isWord ? 'Word 原件已保留' : '课件原件已保留'),
+                  )
+                : c.raster == null
                 ? _PageLoading(page: c.page)
                 : PageSurface(
                     key: _pageKey,
@@ -748,9 +888,7 @@ class ReaderPageState extends State<ReaderPage>
             : '已索引 $ready 页';
         final statusColor = colors.inkMuted;
         return Container(
-          constraints: BoxConstraints(
-            minHeight: AppChrome.titleBarHeight,
-          ),
+          constraints: BoxConstraints(minHeight: AppChrome.titleBarHeight),
           padding: EdgeInsets.symmetric(
             horizontal: narrow ? 6 : 16,
             vertical: 2,
@@ -761,35 +899,53 @@ class ReaderPageState extends State<ReaderPage>
           ),
           child: Row(
             children: [
-              Tooltip(
-                message: '返回书库',
-                child: TextButton.icon(
+              if (constraints.maxWidth < 360)
+                IconButton(
+                  tooltip: '返回书库',
                   onPressed: c.sending ? null : widget.onBack,
-                  style: TextButton.styleFrom(
-                    minimumSize: Size(narrow ? 44 : 0, narrow ? 44 : 36),
-                    padding: EdgeInsets.symmetric(
-                      horizontal: narrow ? 8 : 10,
-                      vertical: 6,
-                    ),
-                    foregroundColor: narrow ? colors.inkMuted : colors.ink,
-                    textStyle: context.texts.bodySmall!.copyWith(
-                      fontSize: narrow ? 12 : 14,
-                      fontWeight: FontWeight.w500,
-                    ),
+                  visualDensity: VisualDensity.compact,
+                  constraints: const BoxConstraints(
+                    minWidth: 40,
+                    minHeight: 40,
                   ),
                   icon: QIcon(
                     QIcons.back,
-                    size: narrow ? IconSizes.sm : IconSizes.md,
+                    size: IconSizes.sm,
+                    color: colors.inkMuted,
                   ),
-                  label: const Text('书库'),
+                )
+              else
+                Tooltip(
+                  message: '返回书库',
+                  child: TextButton.icon(
+                    onPressed: c.sending ? null : widget.onBack,
+                    style: TextButton.styleFrom(
+                      minimumSize: Size(narrow ? 44 : 0, narrow ? 44 : 36),
+                      padding: EdgeInsets.symmetric(
+                        horizontal: narrow ? 8 : 10,
+                        vertical: 6,
+                      ),
+                      foregroundColor: narrow ? colors.inkMuted : colors.ink,
+                      textStyle: context.texts.bodySmall!.copyWith(
+                        fontSize: narrow ? 12 : 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    icon: QIcon(
+                      QIcons.back,
+                      size: narrow ? IconSizes.sm : IconSizes.md,
+                    ),
+                    label: const Text('书库'),
+                  ),
                 ),
-              ),
               SizedBox(width: narrow ? 2 : 6),
               if (constraints.maxWidth >= 520) ...[
                 QIcon(
                   switch (document.kind) {
                     DocumentKind.textbook => QIcons.textbook,
                     DocumentKind.paper => QIcons.paper,
+                    DocumentKind.exercise => QIcons.review,
+                    DocumentKind.video => QIcons.study,
                     DocumentKind.unspecified => QIcons.study,
                   },
                   size: IconSizes.md,
@@ -867,6 +1023,12 @@ class ReaderPageState extends State<ReaderPage>
                   onPressed: ready > 0 ? _search : null,
                   icon: const QIcon(QIcons.search, size: IconSizes.md),
                 ),
+              if (constraints.maxWidth >= 590 && c.opened != null)
+                IconButton(
+                  tooltip: '学习材料工具',
+                  onPressed: _openMaterialTools,
+                  icon: const QIcon(QIcons.ai, size: IconSizes.md),
+                ),
               PopupMenuButton<String>(
                 tooltip: '更多页面工具',
                 icon: QIcon(
@@ -894,48 +1056,36 @@ class ReaderPageState extends State<ReaderPage>
                     case 'shortcuts':
                       showShortcutsDialog(context);
                       break;
+                    case 'material':
+                      _openMaterialTools();
+                      break;
                   }
                 },
                 itemBuilder: (context) => [
                   PopupMenuItem(
+                    value: 'material',
+                    enabled: c.opened != null,
+                    child: _menuRow(context, '学习材料工具', null, QIcons.study),
+                  ),
+                  PopupMenuItem(
                     value: 'search',
                     enabled: ready > 0,
-                    child: _menuRow(
-                      context,
-                      '检索本篇原文',
-                      'Ctrl+F',
-                      QIcons.search,
-                    ),
+                    child: _menuRow(context, '检索本篇原文', 'Ctrl+F', QIcons.search),
                   ),
                   PopupMenuItem(
                     value: 'jump',
-                    child: _menuRow(
-                      context,
-                      '跳转物理页',
-                      'Ctrl+G',
-                      QIcons.page,
-                    ),
+                    child: _menuRow(context, '跳转物理页', 'Ctrl+G', QIcons.page),
                   ),
                   const PopupMenuDivider(),
                   PopupMenuItem(
                     value: 'ocr',
                     enabled: !c.indexing,
-                    child: _menuRow(
-                      context,
-                      '重新识别当前整页',
-                      null,
-                      QIcons.ocr,
-                    ),
+                    child: _menuRow(context, '重新识别当前整页', null, QIcons.ocr),
                   ),
                   PopupMenuItem(
                     value: 'correct',
                     enabled: !c.indexing,
-                    child: _menuRow(
-                      context,
-                      '校正当前页文字',
-                      null,
-                      QIcons.notes,
-                    ),
+                    child: _menuRow(context, '校正当前页文字', null, QIcons.notes),
                   ),
                   PopupMenuItem(
                     value: 'index',
@@ -949,16 +1099,11 @@ class ReaderPageState extends State<ReaderPage>
                   const PopupMenuDivider(),
                   PopupMenuItem(
                     value: 'shortcuts',
-                    child: _menuRow(
-                      context,
-                      '键盘快捷键',
-                      null,
-                      QIcons.keyboard,
-                    ),
+                    child: _menuRow(context, '键盘快捷键', null, QIcons.keyboard),
                   ),
                 ],
               ),
-              if (widget.showWindowChrome)
+              if (_hasWindowChrome)
                 const SizedBox(width: AppChrome.captionWidth),
             ],
           ),
@@ -1127,6 +1272,22 @@ class _PageLoading extends StatelessWidget {
     final c = context.colors;
     return LayoutBuilder(
       builder: (context, constraints) {
+        if (constraints.maxHeight < 220) {
+          return Semantics(
+            label: '正在渲染第 $page 页',
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Text(
+                  '正在渲染第 $page 页…',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: context.texts.bodySmall,
+                ),
+              ),
+            ),
+          );
+        }
         final height = math.max(
           80.0,
           math.min(320.0, constraints.maxHeight - 80),

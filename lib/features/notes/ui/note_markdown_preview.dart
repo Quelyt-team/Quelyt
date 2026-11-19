@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../ui/theme/tokens.dart';
+import '../../materials/science/science_text.dart';
 
 /// Lightweight Markdown reading view used by the editor's 预览 / 分栏 mode.
 /// The Markdown source stays canonical, and the preview covers headings,
@@ -58,9 +59,10 @@ class NoteMarkdownPreview extends StatelessWidget {
         index++;
         continue;
       }
-      if (trimmed.startsWith(r'$$')) {
+      if (trimmed.startsWith(r'$$') || trimmed.startsWith(r'\[')) {
+        final close = trimmed.startsWith(r'\[') ? r'\]' : r'$$';
         final formula = <String>[];
-        if (trimmed.length >= 4 && trimmed.endsWith(r'$$')) {
+        if (trimmed.length >= 4 && trimmed.endsWith(close)) {
           final single = trimmed.substring(2, trimmed.length - 2).trim();
           if (single.isNotEmpty) formula.add(single);
           index++;
@@ -70,7 +72,7 @@ class NoteMarkdownPreview extends StatelessWidget {
           index++;
           while (index < lines.length) {
             final current = lines[index].trim();
-            if (current.endsWith(r'$$')) {
+            if (current.endsWith(close)) {
               final body = current.substring(0, current.length - 2).trim();
               if (body.isNotEmpty) formula.add(body);
               index++;
@@ -90,15 +92,12 @@ class NoteMarkdownPreview extends StatelessWidget {
               borderRadius: BorderRadius.circular(Radii.sm),
               border: Border.all(color: colors.outline),
             ),
-            child: SelectableText(
-              formula.isEmpty ? ' ' : formula.join('\n'),
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontFamily: 'Cambria Math',
-                fontSize: 16,
-                height: 1.6,
-                fontStyle: FontStyle.italic,
-                color: colors.ink,
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: ScientificFormula(
+                latex: formula.join('\n'),
+                display: true,
+                style: TextStyle(fontSize: 16, color: colors.ink),
               ),
             ),
           ),
@@ -199,18 +198,13 @@ class NoteMarkdownPreview extends StatelessWidget {
               top: level <= 2 ? 10 : 6,
               bottom: 6,
             ),
-            child: SelectableText.rich(
-              TextSpan(
-                style: context.texts.titleSmall!.copyWith(
-                  fontSize: size,
-                  height: 1.35,
-                  fontWeight: FontWeight.w600,
-                ),
-                children: _inline(
-                  heading.group(2)!,
-                  context.texts.titleSmall!.copyWith(fontSize: size),
-                  colors.primary,
-                ),
+            child: _inlineText(
+              context,
+              heading.group(2)!,
+              context.texts.titleSmall!.copyWith(
+                fontSize: size,
+                height: 1.35,
+                fontWeight: FontWeight.w600,
               ),
             ),
           ),
@@ -378,6 +372,7 @@ class NoteMarkdownPreview extends StatelessWidget {
             next.startsWith('>') ||
             next.startsWith('```') ||
             next.startsWith(r'$$') ||
+            next.startsWith(r'\[') ||
             RegExp(r'^(-{3,}|\*{3,}|_{3,})$').hasMatch(next) ||
             RegExp(r'^[-*]\s+').hasMatch(next) ||
             RegExp(r'^\d+\.\s+').hasMatch(next)) {
@@ -404,17 +399,16 @@ class NoteMarkdownPreview extends StatelessWidget {
   }
 
   Widget _inlineText(BuildContext context, String value, TextStyle style) =>
-      SelectableText.rich(
-        TextSpan(
-          style: style,
-          children: _inline(value, style, context.colors.primary),
-        ),
+      ScienceText(
+        value,
+        style: style,
+        plainSpans: (text) => _inline(text, style, context.colors.primary),
       );
 
   List<InlineSpan> _inline(String value, TextStyle style, Color accent) {
     final spans = <InlineSpan>[];
     final pattern = RegExp(
-      r'(\*\*[^*]+\*\*|~~[^~]+~~|\*[^*]+\*|`[^`]+`|\$[^$]+\$|\[[^\]]+\]\([^)]+\))',
+      r'(\*\*[^*]+\*\*|~~[^~]+~~|\*[^*]+\*|`[^`]+`|\[[^\]]+\]\([^)]+\))',
     );
     var start = 0;
     for (final match in pattern.allMatches(value)) {
@@ -451,17 +445,6 @@ class NoteMarkdownPreview extends StatelessWidget {
               fontFamily: 'Consolas',
               color: accent,
               fontSize: (style.fontSize ?? 14) - 1,
-            ),
-          ),
-        );
-      } else if (token.startsWith(r'$') && token.endsWith(r'$')) {
-        spans.add(
-          TextSpan(
-            text: token.substring(1, token.length - 1),
-            style: style.copyWith(
-              fontFamily: 'Cambria Math',
-              fontStyle: FontStyle.italic,
-              color: accent,
             ),
           ),
         );

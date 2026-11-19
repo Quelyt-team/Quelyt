@@ -159,16 +159,20 @@ class QIcon extends StatelessWidget {
     Widget child = SizedBox.square(dimension: resolvedSize);
     final data = icon;
     if (data != null) {
-      child = CustomPaint(
-        size: Size.square(resolvedSize),
-        painter: QIconPainter(
-          icon: data,
-          color: resolvedColor,
-          active: active,
-          strokeWidth: strokeFor(resolvedSize),
+      child = SizedBox.square(
+        dimension: resolvedSize,
+        child: CustomPaint(
+          size: Size.square(resolvedSize),
+          painter: QIconPainter(
+            icon: data,
+            color: resolvedColor,
+            active: active,
+            strokeWidth: strokeFor(resolvedSize),
+          ),
         ),
       );
     }
+    child = Center(widthFactor: 1, heightFactor: 1, child: child);
     if (semanticLabel == null) {
       return ExcludeSemantics(child: child);
     }

@@ -72,22 +72,65 @@ class _DocumentCoverImageState extends State<DocumentCoverImage> {
   }
 
   Widget _fallback(BuildContext context) {
-    final colors = context.colors;
+    final visual = documentFormatVisual(
+      context,
+      widget.document.format,
+      originalName: widget.document.originalName,
+      filePath: widget.document.filePath,
+    );
+    final showBadge = widget.height >= 72 && widget.width >= 60;
     return Container(
       width: widget.width,
       height: widget.height,
       decoration: BoxDecoration(
-        color: colors.surfaceRaised,
+        color: visual.background,
         borderRadius: BorderRadius.circular(Radii.sm),
-        border: Border.all(color: colors.outline),
+        border: Border.all(color: visual.border),
       ),
-      child: Center(
-        child: QIcon(
-          documentIcon(widget.document.format),
-          size: widget.iconSize,
-          color: colors.inkMuted,
-        ),
-      ),
+      child: showBadge
+          ? Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                QIcon(
+                  visual.icon,
+                  size: widget.iconSize,
+                  color: visual.ink,
+                  active: visual.icon == QIcons.fileVideo,
+                ),
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: visual.ink.withValues(alpha: .12),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    visual.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: context.texts.labelSmall!.copyWith(
+                      fontSize: 10.5,
+                      height: 1.15,
+                      letterSpacing: 0.4,
+                      color: visual.ink,
+                      fontWeight: FontWeight.w700,
+                      fontFeatures: AppNumerals.tabular,
+                    ),
+                  ),
+                ),
+              ],
+            )
+          : Center(
+              child: QIcon(
+                visual.icon,
+                size: widget.iconSize,
+                color: visual.ink,
+                active: visual.icon == QIcons.fileVideo,
+              ),
+            ),
     );
   }
 }

@@ -10,6 +10,7 @@ import '../../app_controller.dart';
 import '../../core/models.dart';
 import '../../features/library/services/library_backup_service.dart';
 import '../../features/library/services/library_storage_service.dart';
+import '../../features/materials/material_work_models.dart';
 import '../../services/ai_gateway.dart';
 import '../../services/file_reveal.dart';
 import '../../services/ocr_service.dart';
@@ -245,6 +246,70 @@ class _SettingsDialogState extends State<SettingsDialog> {
     }
   }
 
+  String _visionTestSlot(ProviderSettings settings) =>
+      'visionTest:${materialDigest([settings.endpoint.toString(), settings.effectiveVisionModel])}';
+
+  String get _visionDescription {
+    try {
+      final model = _settings.effectiveVisionModel;
+      if (model.isEmpty) return '自定义接口请填写支持图片的模型。';
+      final last = c.store.getSetting(_visionTestSlot(_settings));
+      return [
+        _vision.text.trim().isEmpty ? '沿用 $model' : model,
+        ?last,
+      ].join(' · ');
+    } catch (_) {
+      return '填写有效的服务地址后可测试图片。';
+    }
+  }
+
+  Future<void> _testVision() async {
+    if (_testing || _saving || !(_form.currentState?.validate() ?? false)) return;
+    final settings = _settings;
+    final key = _key.text.trim();
+    if (key.isEmpty && _hasKey != true) {
+      setState(() => _error = '请先保存这个接口的 API Key。');
+      return;
+    }
+    if (settings.effectiveVisionModel.isEmpty) {
+      setState(() => _error = '请先填写已确认支持图片的视觉模型。');
+      return;
+    }
+    final bytes = (await rootBundle.load('assets/science/vision-test.png')).buffer.asUint8List();
+    if (!mounted) return;
+    final approved = await showAppDialog<bool>(
+      context: context,
+      builder: (context) => AppDialog(
+        title: '测试图片能力',
+        content: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('${settings.provider} · ${settings.effectiveVisionModel}'),
+          SelectableText(settings.endpoint.toString()),
+          const SizedBox(height: 12),
+          Image.memory(bytes, width: 72, height: 72),
+          const Text('发送应用自带的蓝色小方块和一句颜色问题。'),
+        ]),
+        actions: [
+          DialogActions.cancel(context),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('发送测试图')),
+        ],
+      ),
+    );
+    if (approved != true || !mounted) return;
+    setState(() { _testing = true; _error = null; _notice = null; });
+    try {
+      if (key.isNotEmpty) await c.saveSettings(settings, key);
+      await c.gateway.testVision(settings,
+        ImageAttachment(bytes: bytes, mimeType: 'image/png', scopeLabel: '应用测试图'));
+      c.store.setSetting(_visionTestSlot(settings), '图片测试通过');
+      if (mounted) setState(() => _notice = '模型正确识别了测试图。');
+    } catch (error) {
+      c.store.setSetting(_visionTestSlot(settings), '上次图片测试未通过');
+      if (mounted) setState(() => _error = '$error');
+    } finally {
+      if (mounted) setState(() => _testing = false);
+    }
+  }
+
   Future<void> _deleteKey() async {
     try {
       await c.gateway.deleteKey(_settings);
@@ -312,6 +377,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
   Future<void> _backupLibrary({
     bool includeTrash = true,
     bool? asZip,
+    bool includeVideoOriginals = true,
   }) async {
     Directory? tempDir;
     try {
@@ -345,6 +411,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
           p.dirname(outputZipPath),
           fileName: p.basename(outputZipPath),
           includeTrash: includeTrash,
+          includeVideoOriginals: includeVideoOriginals,
         );
       } else {
         final destination = await FilePicker.platform.getDirectoryPath(
@@ -352,7 +419,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
         );
         if (destination == null || !mounted) return;
         setState(() => _notice = '正在备份整库…');
-        report = await service.create(destination, includeTrash: includeTrash);
+        report = await service.create(destination, includeTrash: includeTrash,
+          includeVideoOriginals: includeVideoOriginals);
       }
       if (!mounted) return;
       setState(() => _notice = report.summary);
@@ -413,7 +481,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
               ),
               const SizedBox(height: Space.md),
               Text(
-                '含原件、复习图片与全部学习数据（不含 API Key）；'
+                '${includeVideoOriginals ? '包含视频和其他原件' : '保留视频记录和哈希，省略视频原件'}、已保存图片与学习数据。'
                 '${report.includeTrash ? '含回收站' : '不含回收站'}。',
                 style: context.texts.bodySmall!.copyWith(height: 1.6),
               ),
@@ -445,6 +513,26 @@ class _SettingsDialogState extends State<SettingsDialog> {
         } catch (_) {}
       }
     }
+  }
+
+  Future<void> _lightBackup() async {
+    final videos = c.store.getDocuments(includeTrashed: true).where((doc) => doc.isVideo).toList();
+    final approved = await showAppDialog<bool>(
+      context: context,
+      builder: (context) => AppDialog(
+        title: '轻量备份',
+        subtitle: '保留学习数据、暂停画面和视频哈希。恢复后可重新连接同一视频。',
+        content: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('将省略 ${videos.length} 份视频原件'),
+          for (final doc in videos) Text(doc.title),
+        ]),
+        actions: [
+          DialogActions.cancel(context),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('导出轻量备份')),
+        ],
+      ),
+    );
+    if (approved == true && mounted) await _backupLibrary(asZip: true, includeVideoOriginals: false);
   }
 
   Future<void> _showStorage() async {
@@ -1385,7 +1473,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
           _row(
             context,
             '视觉模型',
-            description: '用于图片问答；可留空。',
+            description: _visionDescription,
+            action: TextButton(
+              onPressed: _saving || _testing ? null : _testVision,
+              child: const Text('测试图片能力'),
+            ),
             control: TextFormField(
               controller: _vision,
               decoration: const InputDecoration(hintText: '可选'),
@@ -1576,6 +1668,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
               TextButton(
                 onPressed: () => _backupLibrary(includeTrash: false),
                 child: const Text('备份但不含回收站'),
+              ),
+              TextButton(
+                onPressed: _lightBackup,
+                child: const Text('轻量备份（省略视频原件）'),
               ),
             ],
           ),

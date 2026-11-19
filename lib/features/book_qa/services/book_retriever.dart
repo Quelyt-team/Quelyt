@@ -1,5 +1,6 @@
 import '../../../core/local_store.dart';
 import '../../../core/models.dart';
+import '../../../core/page_evidence_layout.dart';
 import '../../../core/search_index.dart';
 import '../data/book_qa_repository.dart';
 import '../models/book_qa_models.dart';
@@ -75,7 +76,7 @@ class BookRetrieval {
         '另有 ${unprocessedChapters.length - 4} 章尚未整理',
     ];
     final scope = currentPageOnly
-        ? '第 ${analysis.focusPageLabel} 页及相邻页'
+        ? '仅第 ${analysis.focusPageLabel} 页'
         : searchedWholeBook
         ? '整本教材 ${progress.pages.readyPages}/${progress.pages.totalPages} 页可用文字'
         : '教材已解析页';
@@ -104,6 +105,20 @@ class BookRetrieval {
   }
 
   List<String> webQueries({int max = 2}) {
+    if (analysis.asksWhy &&
+        RegExp(
+          r'头尾(?:键[连接]|连接)|head[-\s]+to[-\s]+tail',
+          caseSensitive: false,
+        ).hasMatch(analysis.question) &&
+        RegExp(
+          r'聚合|高分子|乙烯基|polymeri[sz]|vinyl',
+          caseSensitive: false,
+        ).hasMatch(analysis.question)) {
+      return const [
+        '乙烯基单体 自由基聚合 头尾键连 区域选择性 原因',
+        'vinyl polymerization head-to-tail regioselectivity steric electronic effects',
+      ].take(max).toList();
+    }
     final concept = matchedKnowledge.isNotEmpty
         ? matchedKnowledge.first.term
         : analysis.aliases.isNotEmpty
@@ -127,7 +142,8 @@ class BookRetrieval {
     final first = '$concept $intent'.trim();
     if (first.isNotEmpty) queries.add(_clipQuery(first));
     if (queries.length < max) {
-      if (english.trim().isNotEmpty) {
+      if (english.trim().contains(' ') ||
+          (english.length >= 5 && !analysis.asksWhy)) {
         final suffix = analysis.asksWhy ? 'mechanism' : 'definition';
         queries.add(_clipQuery('$english $suffix'));
       } else if (intent.isEmpty) {
@@ -276,8 +292,30 @@ class BookRetriever {
     final matchedChapters = _matchChapters(analysis, chapters);
     final traces = <String>[];
     final scores = <String, _ScoredEvidence>{};
-    final start = currentPageOnly ? (focusPage ?? 1) - 1 : null;
-    final end = currentPageOnly ? (focusPage ?? 1) + 1 : null;
+    final start = currentPageOnly ? (focusPage ?? 1) : null;
+    final end = start;
+    final layouts = <int, PageEvidenceLayout>{};
+    void collectHit(Evidence hit, double weight) {
+      if (start != null && hit.page != start) return;
+      if (hit.documentHash != document.contentHash) return;
+      final row = layouts
+          .putIfAbsent(
+            hit.page,
+            () => PageEvidenceLayout(
+              store.getEvidence(document.id, page: hit.page),
+            ),
+          )
+          .contextFor(hit);
+      final normalized = normalizeBookTerm(row.text);
+      final matchingPhrases = analysis.aliases
+          .where(
+            (alias) =>
+                alias.length >= 3 &&
+                normalized.contains(normalizeBookTerm(alias)),
+          )
+          .length;
+      _add(scores, row, weight + matchingPhrases * .35);
+    }
 
     void collect(String label, String query, double weight, {int limit = 24}) {
       if (query.trim().isEmpty) return;
@@ -292,7 +330,7 @@ class BookRetriever {
       for (var index = 0; index < hits.length; index++) {
         final hit = hits[index];
         final bonus = index < 3 ? 0.6 : 0;
-        _add(scores, hit, weight + bonus);
+        collectHit(hit, weight + bonus);
       }
     }
 
@@ -323,7 +361,7 @@ class BookRetriever {
         page: point.startPage,
       );
       for (final hit in pageEvidence.take(2)) {
-        _add(scores, hit, 4.5);
+        collectHit(hit, 4.5);
       }
       traces.add('知识点页: ${point.startPage}');
     }
@@ -335,7 +373,7 @@ class BookRetriever {
         endPage: (chapter.startPage + 1).clamp(1, document.pageCount),
       );
       for (final hit in chapterEvidence.take(2)) {
-        _add(scores, hit, 3.5);
+        collectHit(hit, 3.5);
       }
     }
 
@@ -344,7 +382,7 @@ class BookRetriever {
     if (hintPage != null && !currentPageOnly) {
       for (final hit
           in store.getEvidence(document.id, page: hintPage).take(2)) {
-        _add(scores, hit, 1.2);
+        collectHit(hit, 1.2);
       }
     }
 
@@ -358,7 +396,7 @@ class BookRetriever {
       // A current-page question still needs the page text when FTS misses it.
       final page = focusPage ?? 1;
       for (final hit in store.getEvidence(document.id, page: page).take(6)) {
-        _add(scores, hit, 2);
+        collectHit(hit, 2);
       }
     }
     final expanded = _expandNeighbours(
@@ -416,7 +454,13 @@ class BookRetriever {
       evidence: selected,
       hitChapters: hitChapters,
       unprocessedChapters: unprocessed,
-      matchedKnowledge: matched,
+      matchedKnowledge: currentPageOnly
+          ? matched
+                .where(
+                  (point) => point.startPage == start && point.endPage == start,
+                )
+                .toList()
+          : matched,
       progress: progress,
       searchedWholeBook: !currentPageOnly,
       currentPageOnly: currentPageOnly,

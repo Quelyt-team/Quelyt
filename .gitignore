@@ -34,3 +34,6 @@ docs/
 /*实施计划.md
 /*对齐方案.md
 /*调整方案.md
+scripts/convert_md_to_docx.py
+scripts/mathjax/node_modules/
+**/.cxx/

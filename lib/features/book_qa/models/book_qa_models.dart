@@ -219,17 +219,26 @@ class WebCitation {
   );
 }
 
+enum AnswerBlockKind { paragraph, steps, math, chem, table }
+
 class BookAnswerBlock {
   const BookAnswerBlock({
     required this.text,
     this.bookCitationIds = const [],
     this.webCitationIds = const [],
     this.supplemental = false,
+    this.kind = AnswerBlockKind.paragraph,
+    this.latex,
+    this.needsVerification = false,
   });
 
   final String text;
   final List<String> bookCitationIds;
   final List<String> webCitationIds;
+  final AnswerBlockKind kind;
+  final String? latex;
+  final bool needsVerification;
+  String get markdown => latex == null ? text : '\$\$\n${latex!}\n\$\$';
 
   /// True for reasoning or background that is neither a direct textbook
   /// conclusion nor a quoted external source.
@@ -240,6 +249,9 @@ class BookAnswerBlock {
     'bookCitations': bookCitationIds,
     'webCitations': webCitationIds,
     'supplemental': supplemental,
+    'kind': kind.name,
+    if (latex != null) 'latex': latex,
+    if (needsVerification) 'needsVerification': true,
   };
 
   factory BookAnswerBlock.fromJson(Map<String, dynamic> json) =>
@@ -254,6 +266,10 @@ class BookAnswerBlock {
             if (item is String) item,
         ],
         supplemental: json['supplemental'] as bool? ?? false,
+        kind: AnswerBlockKind.values.asNameMap()[json['kind']] ??
+            AnswerBlockKind.paragraph,
+        latex: json['latex'] as String?,
+        needsVerification: json['needsVerification'] == true,
       );
 }
 
@@ -355,7 +371,7 @@ class BookQaAnswer {
   final List<String> searchQueries;
   final DateTime createdAt;
 
-  String get plainText => blocks.map((block) => block.text).join('\n\n');
+  String get plainText => blocks.map((block) => block.markdown).join('\n\n');
   bool get requiresVerification => rejectedCitationIds.isNotEmpty;
 
   BookQaAnswer copyWith({

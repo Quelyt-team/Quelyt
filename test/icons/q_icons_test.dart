@@ -6,7 +6,10 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:local_study/core/models.dart';
+import 'package:local_study/features/library/ui/library_style.dart';
 import 'package:local_study/ui/icons/q_icons.dart';
+import 'package:local_study/ui/theme/app_theme.dart';
 
 /// Old Material glyphs for the signature icons, used by the before/after sheet.
 const _before = <String, IconData>{
@@ -81,6 +84,25 @@ void main() {
       expect(QIcon.strokeFor(IconSizes.xl), 2.0);
     });
 
+    testWidgets('QIcon keeps its requested size inside larger min constraints', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: Align(
+            alignment: Alignment.topLeft,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+              child: const QIcon(QIcons.search, size: IconSizes.sm),
+            ),
+          ),
+        ),
+      );
+      final paintSize = tester.getSize(find.byType(CustomPaint));
+      expect(paintSize, const Size.square(IconSizes.sm));
+    });
+
     test('lib/ contains zero Material Icons or Icon widget usages', () {
       final violations = <String>[];
       final pattern = RegExp(
@@ -98,6 +120,51 @@ void main() {
         }
       }
       expect(violations, isEmpty, reason: violations.join('\n'));
+    });
+
+    test('library format icons and labels map every supported extension', () {
+      expect(documentIcon('pdf'), QIcons.filePdf);
+      expect(documentIcon('.PDF'), QIcons.filePdf);
+      expect(documentIcon('doc'), QIcons.fileWord);
+      expect(documentIcon('docx'), QIcons.fileWord);
+      expect(documentIcon('png'), QIcons.fileImage);
+      expect(documentIcon('jpg'), QIcons.fileImage);
+      expect(documentIcon('jpeg'), QIcons.fileImage);
+      expect(documentIcon('ppt'), QIcons.fileSlides);
+      expect(documentIcon('pptx'), QIcons.fileSlides);
+      expect(documentIcon('mp4'), QIcons.fileVideo);
+      expect(documentIcon('webm'), QIcons.fileVideo);
+      expect(documentIcon('mkv'), QIcons.fileVideo);
+      expect(documentIcon(''), QIcons.fileGeneric);
+      expect(documentIcon('unknown'), QIcons.fileGeneric);
+
+      expect(formatLabel('pdf'), 'PDF');
+      expect(formatLabel('doc'), 'DOC');
+      expect(formatLabel('docx'), 'DOCX');
+      expect(formatLabel('jpeg'), 'JPG');
+      expect(formatLabel('pptx'), 'PPTX');
+      expect(formatLabel('mp4'), 'MP4');
+      expect(formatLabel(''), '文件');
+
+      final legacyPdf = DocumentRecord(
+        id: 'legacy-1',
+        title: '旧版 PDF',
+        kind: DocumentKind.paper,
+        filePath: '/docs/sample.pdf',
+        contentHash: 'h1',
+      );
+      expect(documentFormat(legacyPdf), 'pdf');
+      expect(formatLabel(documentFormat(legacyPdf)), 'PDF');
+
+      final legacySlides = DocumentRecord(
+        id: 'legacy-2',
+        title: '讲评课件',
+        kind: DocumentKind.textbook,
+        filePath: '/docs/blob',
+        originalName: '第三章.pptx',
+        contentHash: 'h2',
+      );
+      expect(documentFormat(legacySlides), 'pptx');
     });
   });
 
@@ -149,7 +216,7 @@ void main() {
     }
 
     testWidgets('contact sheet', (tester) async {
-      tester.view.physicalSize = const Size(1480, 1500);
+      tester.view.physicalSize = const Size(1480, 1740);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
       final key = GlobalKey();
@@ -169,6 +236,69 @@ void main() {
         ),
       );
       await capture(tester, key, 'folio_line_sheet');
+    });
+
+    testWidgets('library format icons sheet', (tester) async {
+      tester.view.physicalSize = const Size(1120, 320);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final key = GlobalKey();
+      const formats = [
+        'pdf',
+        'docx',
+        'doc',
+        'pptx',
+        'ppt',
+        'png',
+        'jpg',
+        'mp4',
+        'webm',
+        'mkv',
+        '',
+      ];
+      Widget panel(Brightness brightness) => Theme(
+        data: buildAppTheme(brightness),
+        child: Builder(
+          builder: (context) => Container(
+            color: brightness == Brightness.dark
+                ? const Color(0xFF121212)
+                : Colors.white,
+            padding: const EdgeInsets.all(20),
+            child: Wrap(
+              spacing: 18,
+              runSpacing: 16,
+              children: [
+                for (final f in formats)
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      DocumentFormatIcon(format: f, size: 36, iconSize: 18),
+                      const SizedBox(height: 8),
+                      DocumentFormatTag(format: f, compact: true),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      await tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: RepaintBoundary(
+            key: key,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(child: panel(Brightness.light)),
+                Expanded(child: panel(Brightness.dark)),
+              ],
+            ),
+          ),
+        ),
+      );
+      await capture(tester, key, 'library_format_icons');
     });
 
     testWidgets('before and after', (tester) async {

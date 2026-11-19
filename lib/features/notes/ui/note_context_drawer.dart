@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 
 import '../../../ui/theme/tokens.dart';
 import '../models/note_models.dart';
@@ -15,6 +18,7 @@ class NoteContextPane extends StatelessWidget {
     this.onOpenSource,
     this.onCollapse,
     this.sidebarStyle = true,
+    this.assetDirectory,
   });
 
   final NotesController controller;
@@ -22,6 +26,7 @@ class NoteContextPane extends StatelessWidget {
   final ValueChanged<NoteSource>? onOpenSource;
   final VoidCallback? onCollapse;
   final bool sidebarStyle;
+  final String? assetDirectory;
 
   @override
   Widget build(BuildContext context) {
@@ -131,7 +136,7 @@ class NoteContextPane extends StatelessWidget {
                         children: [
                           Text(
                             '${source.title.isEmpty ? '资料' : source.title}'
-                            '${source.page == null ? '' : ' · 第 ${source.page} 页'}',
+                            '${source.locatorLabel != null ? ' · ${source.locatorLabel}' : source.page == null ? '' : ' · 第 ${source.page} 页'}',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: context.texts.bodySmall!.copyWith(
@@ -139,6 +144,14 @@ class NoteContextPane extends StatelessWidget {
                               fontWeight: FontWeight.w600,
                             ),
                           ),
+                          if (source.assetName case final name?
+                              when assetDirectory != null &&
+                                RegExp(r'^material-[a-f0-9]{64}\.png$').hasMatch(name))
+                            Image.file(
+                              File(p.join(assetDirectory!, name)), height: 88,
+                              fit: BoxFit.contain,
+                              errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                            ),
                           if (source.excerpt.trim().isNotEmpty) ...[
                             const SizedBox(height: 3),
                             Text(
@@ -155,7 +168,7 @@ class NoteContextPane extends StatelessWidget {
                         ],
                       ),
                     ),
-                    if (source.documentId != null)
+                    if (source.documentId != null || source.url != null)
                       IconButton(
                         tooltip: '回到原文',
                         onPressed: () => onOpenSource?.call(source),

@@ -24,6 +24,7 @@ class LibraryThumbnailService {
   }
 
   Future<File?> _generate(DocumentRecord document) async {
+    if (document.isVideo || (document.usesConvertedPreview && document.slideRenderer == null)) return null;
     final source = File(document.filePath);
     if (!await source.exists() || !document.isActive) return null;
     final directory = Directory(

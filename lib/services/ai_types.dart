@@ -46,6 +46,20 @@ class ProviderSettings {
   final String model;
   final String visionModel;
 
+  /// The official DeepSeek Chat Completions endpoint accepts images on these
+  /// models. A compatible third-party endpoint must opt in explicitly.
+  String get effectiveVisionModel {
+    if (visionModel.trim().isNotEmpty) return visionModel.trim();
+    if (endpoint.host == 'api.deepseek.com' &&
+        endpoint.scheme == 'https' &&
+        endpoint.port == 443 &&
+        const {'/chat/completions', '/v1/chat/completions'}.contains(endpoint.path) &&
+        const {'deepseek-flash', 'deepseek-pro'}.contains(model.trim())) {
+      return model.trim();
+    }
+    return '';
+  }
+
   Map<String, dynamic> toJson() => {
     'provider': provider,
     'baseUrl': baseUrl,

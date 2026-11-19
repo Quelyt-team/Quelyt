@@ -4,11 +4,13 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../app_controller.dart';
 import '../core/models.dart';
 import '../features/book_qa/book_qa_controller.dart';
 import '../features/library/library_controller.dart';
+import '../features/materials/video/video_study_page.dart';
 import '../features/notes/data/notes_repository.dart';
 import '../features/notes/models/note_models.dart';
 import '../features/notes/notes_controller.dart';
@@ -37,6 +39,7 @@ import 'shell/window_title_bar.dart';
 import 'theme/app_theme.dart';
 import 'widgets/app_dialog.dart';
 import 'widgets/app_surfaces.dart';
+import 'widgets/quelyt_splash.dart';
 import 'theme/appearance.dart';
 import 'theme/tokens.dart';
 
@@ -45,12 +48,16 @@ class StudyApp extends StatefulWidget {
     super.key,
     required this.controller,
     this.showWindowChrome = false,
+    this.showSplash = false,
   });
   final StudyController controller;
 
   /// The real desktop entrypoint enables the custom Windows caption. Widget
   /// tests leave it off so their viewport models the content area only.
   final bool showWindowChrome;
+
+  /// Plays the startup brand reveal on real Windows and Android launches.
+  final bool showSplash;
 
   @override
   State<StudyApp> createState() => _StudyAppState();
@@ -83,7 +90,11 @@ class _StudyAppState extends State<StudyApp> {
       themeAnimationCurve: Motion.curve,
       builder: (context, child) => WindowFrame(
         enabled: widget.showWindowChrome,
-        child: child ?? const SizedBox.shrink(),
+        child: QuelytSplashOverlay(
+          enabled: widget.showSplash,
+          showWindowChrome: widget.showWindowChrome,
+          child: child ?? const SizedBox.shrink(),
+        ),
       ),
       home: StudyHome(
         controller: widget.controller,
@@ -146,6 +157,7 @@ class _StudyHomeState extends State<StudyHome> with WidgetsBindingObserver {
     _library = LibraryController(
       store: widget.controller.store,
       documents: widget.controller.documents,
+      onImported: (document) => unawaited(c.catalogPaper(document)),
     );
     _library.addListener(_onLibraryChanged);
     _notes = NotesController(
@@ -296,7 +308,7 @@ class _StudyHomeState extends State<StudyHome> with WidgetsBindingObserver {
   }
 
   void _onStudyChanged() {
-    _bookQa.attach(c.current);
+    _bookQa.attach(c.current?.isVideo == true ? null : c.current);
     final current = c.current;
     if (current?.id != _lastOpenedId) {
       _lastOpenedId = current?.id;
@@ -607,6 +619,13 @@ class _StudyHomeState extends State<StudyHome> with WidgetsBindingObserver {
   }
 
   Future<void> _openNoteSource(NoteSource source) async {
+    if (source.url case final url?) {
+      final uri = Uri.tryParse(url);
+      if (uri != null && const {'http', 'https'}.contains(uri.scheme) && uri.host.isNotEmpty) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      }
+      return;
+    }
     final documentId = source.documentId;
     if (documentId == null) {
       _toast('这条来源没有关联资料。');
@@ -625,7 +644,11 @@ class _StudyHomeState extends State<StudyHome> with WidgetsBindingObserver {
       await c.open(document);
     }
     if (c.current?.id != document.id) return;
-    setState(() => _section = AppSection.notes);
+    if (!mounted) return;
+    setState(() {
+      _section = AppSection.notes;
+      if (source.sourceType == 'answer') _openPanelOnStart = true;
+    });
     await c.jumpToEvidence(
       Evidence(
         id: 'note-source-${source.id}',
@@ -634,6 +657,8 @@ class _StudyHomeState extends State<StudyHome> with WidgetsBindingObserver {
         page: source.page ?? 1,
         region: source.region,
         text: source.excerpt,
+        timeMs: source.timeMs,
+        locatorLabel: source.locatorLabel,
       ),
     );
   }
@@ -749,7 +774,11 @@ class _StudyHomeState extends State<StudyHome> with WidgetsBindingObserver {
         final activeView = c.current != null
             ? KeyedSubtree(
                 key: ValueKey('reader-${c.current!.id}'),
-                child: ReaderPage(
+                child: c.current!.isVideo ? VideoStudyPage(
+                  study: c, document: c.current!, notes: _notes,
+                  onBack: () => c.backToLibrary(), openNote: _openNoteFromReader,
+                  showWindowChrome: widget.showWindowChrome,
+                ) : ReaderPage(
                   key: _readerKey,
                   controller: c,
                   appearance: widget.appearance,
@@ -764,6 +793,10 @@ class _StudyHomeState extends State<StudyHome> with WidgetsBindingObserver {
                   openPanelOnStart: _openPanelOnStart,
                   onOpenOcrSettings: () => _openSettings(SettingsSection.ocr),
                   onOpenNoteInWorkspace: _openNoteFromReader,
+                  notesController: _notes,
+                  sourceEntryId: (_library.repository.entryInFolder(
+                    _library.importTargetFolderId, c.current!.id,
+                  ) ?? _library.repository.primaryEntry(c.current!.id))?.id,
                 ),
               )
             : KeyedSubtree(
@@ -954,9 +987,30 @@ class _StudyHomeState extends State<StudyHome> with WidgetsBindingObserver {
           ? Drawer(
               backgroundColor: context.colors.sidebar,
               child: SafeArea(
-                child: _section == AppSection.library
-                    ? LibraryTree(controller: _library, drawer: true)
-                    : NotesSidebarTree(controller: _notes, drawer: true),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(
+                      child: _section == AppSection.library
+                          ? LibraryTree(controller: _library, drawer: true)
+                          : NotesSidebarTree(controller: _notes, drawer: true),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+                      child: Divider(height: 1, color: context.colors.outline),
+                    ),
+                    Builder(
+                      builder: (drawerContext) => SidebarSettingsRow(
+                        showShortcut: false,
+                        onTap: () {
+                          Navigator.of(drawerContext).pop();
+                          _openSettings();
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                  ],
+                ),
               ),
             )
           : null,

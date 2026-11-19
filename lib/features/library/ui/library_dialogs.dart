@@ -938,10 +938,11 @@ class _ImportRow extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(12, 7, 8, 7),
       child: Row(
         children: [
-          QIcon(
-            documentIcon(item.extension),
-            size: IconSizes.sm,
-            color: colors.inkMuted,
+          DocumentFormatIcon(
+            format: item.extension,
+            originalName: item.sourceName,
+            size: 26,
+            iconSize: 14,
           ),
           const SizedBox(width: 8),
           Expanded(

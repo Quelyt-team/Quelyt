@@ -34,7 +34,7 @@ Quelyt 面向需要围绕真实教材、学术论文与习题开展长期深度�
 
 | 模块 | 主要能力 |
 | --- | --- |
-| **资料库与跨端同步** | 统一导入队列（SAF 目录授权 / 分享接收 / 桌面拖入）、SHA-256 去重、多级彩色文件夹树、快捷方式、标签/星标、智能文件夹、浮层操作菜单、回收站恢复、原件/`.zip` 导出、`VACUUM INTO` `.zip` 整库备份与跨端重链恢复 |
+| **资料库与整库备份** | 统一导入队列（SAF 目录授权 / 分享接收 / 桌面拖入）、SHA-256 去重、多级彩色文件夹树、快捷方式、标签/星标、智能文件夹、浮层操作菜单、回收站恢复、原件/`.zip` 导出、`VACUUM INTO` `.zip` 整库备份与跨端恢复重链 |
 | **原页阅读与 OCR** | PDF / JPG / PNG 原页阅读（缩放、旋转、框选、物理页跳转、阅读位置恢复）、随包中英文 Tesseract OCR、SQLite FTS5 全文检索与人工校对 |
 | **教材问答与整书理解** | 章节（可编辑）/分块/知识点/全书概览索引、全书多路检索、DeepSeek 官方 Search / Fetch 联网补充（限流与 7 天缓存）、原页框选图片问答、教材出处/网络参考分列与独立教材会话 |
 | **独立笔记系统** | 独立于教材生命周期的全局笔记工作区、6 类模板、700 ms 自动保存（带修订号防覆盖）、Markdown 工具栏与预览、来源回跳卡片、共享文件夹与标签、全文检索、待解决问题、历史快照恢复、回收站与导出 |
@@ -45,8 +45,8 @@ Quelyt 面向需要围绕真实教材、学术论文与习题开展长期深度�
 
 请前往右侧 **Releases** 页面获取最新预发布软件包：
 
-- **Android arm64（开发体验版）**：在 `v0.3.0-dev.34` 下载 `Quelyt-0.3.0-dev+34-android-arm64-development.apk` 安装体验（当前采用开发调试签名，支持 Android 7.0+ ARM64 与 16 KB 页设备，兼容从 `+33` 覆盖升级）。
-- **Windows x64（便携版）**：在 `v0.3.0-dev` 下载 `Quelyt-0.3.0-dev+33-windows-x64.zip`，完整解压至任意目录后运行 `local_study.exe`（请保留同级 DLL、`data/` 与 `ocr/` 目录）；从源码更新安装可使用 `scripts/install-windows.ps1`。
+- **Android arm64（开发体验版）**：下载 `Quelyt-0.3.0-dev+34-android-arm64-development.apk` 安装体验（当前采用开发调试签名，支持 Android 7.0+ ARM64 与 16 KB 页设备，兼容从 `+33` 覆盖升级）。
+- **Windows x64（便携版）**：下载 `Quelyt-0.3.0-dev+34-windows-x64.zip`（或 `v0.3.0-dev` 中的 `+33` 基线包），完整解压至任意目录后运行 `local_study.exe`（请保留同级 DLL、`data/` 与 `ocr/` 目录）；从源码更新安装可使用 `scripts/install-windows.ps1`。
 - **校验文件**：随 Release 一并提供 `SHA256SUMS.txt` 用于核对下载完整性。
 
 ## 验证状态与已知边界
@@ -136,7 +136,7 @@ Quelyt is built for long-term deep study with your own textbooks, research paper
 
 | Module | Capabilities |
 | --- | --- |
-| **Library & Cross-Device Sync** | Unified import queue (SAF folder grants, share ingestion & desktop drag-and-drop), SHA-256 deduplication, nested colored folder tree, shortcuts, tags/stars, smart folders, floating overlay menu, trash restore, original/`.zip` export, and `VACUUM INTO` `.zip` full-library backup & relink restore |
+| **Library & Full-Library Backup** | Unified import queue (SAF folder grants, share ingestion & desktop drag-and-drop), SHA-256 deduplication, nested colored folder tree, shortcuts, tags/stars, smart folders, floating overlay menu, trash restore, original/`.zip` export, and `VACUUM INTO` `.zip` full-library backup & relink restore |
 | **Reader & Local OCR** | PDF / JPG / PNG page reader (zoom, rotate, region box selection, physical page jump, reading position restore), bundled Chinese/English Tesseract OCR, SQLite FTS5 search, and manual text correction |
 | **Book QA & Whole-Book Indexing** | Editable chapters, chunks, knowledge points & book overview indexing; multi-path whole-book retrieval; optional DeepSeek official Search / Fetch supplement (rate-limited with 7-day cache); cropped-region vision QA; separate book vs. web citations and isolated per-book sessions |
 | **Standalone Notes** | Global notes workspace decoupled from document lifecycles, 6 templates, 700 ms debounced autosave with revision guard, Markdown toolbar & preview, clickable source cards, shared folders & tags, full-text search, open questions tracker, revision history restore, trash & Markdown export |

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:archive/archive_io.dart';
 import 'package:crypto/crypto.dart';
@@ -8,6 +9,9 @@ import 'package:sqlite3/sqlite3.dart';
 
 import '../../../core/local_store.dart';
 import '../../../services/document_service.dart';
+import '../../../services/free_space.dart';
+import '../../materials/slides/slide_converter.dart';
+import '../../materials/word/word_converter.dart';
 
 class LibraryBackupException implements Exception {
   const LibraryBackupException(this.message);
@@ -24,6 +28,7 @@ class BackupReport {
     this.reviewAssets = 0,
     this.includeTrash = true,
     this.isZip = false,
+    this.omittedVideos = 0,
     this.warnings = const [],
   });
 
@@ -33,11 +38,13 @@ class BackupReport {
   final int reviewAssets;
   final bool includeTrash;
   final bool isZip;
+  final int omittedVideos;
   final List<String> warnings;
 
   String get summary =>
       '已备份 $documents 份资料'
       '${reviewAssets > 0 ? ' · $reviewAssets 张复习图片' : ''}'
+      '${omittedVideos > 0 ? ' · 省略 $omittedVideos 份视频原件' : ''}'
       ' · ${_size(bytes)}'
       '${warnings.isEmpty ? '' : ' · ${warnings.length} 个提醒'}';
 
@@ -99,8 +106,8 @@ class LibraryBackupService {
   final LocalStore store;
   final DocumentService documents;
 
-  static const int formatVersion = 2;
-  static const List<int> supportedFormatVersions = [1, 2];
+  static const int formatVersion = 3;
+  static const List<int> supportedFormatVersions = [1, 2, 3];
   static const String manifestName = 'manifest.json';
   static const String databaseName = 'library.sqlite3';
   static const String reviewAssetsDirName = 'review_assets';
@@ -109,17 +116,22 @@ class LibraryBackupService {
   static const String _requestName = 'restore-request.json';
   static const String _resultName = 'restore-result.json';
   static const int _maxZipEntries = 100000;
-  static const int _maxZipUncompressedBytes = 2 * 1024 * 1024 * 1024;
+  static const int _maxZipUncompressedBytes = 128 * 1024 * 1024 * 1024;
+  static const int _volumeBytes = 256 * 1024 * 1024;
+  static const int _reserveBytes = 16 * 1024 * 1024;
 
   Future<BackupReport> create(
     String destination, {
     bool includeTrash = true,
+    bool includeVideoOriginals = true,
   }) async {
     final destinationDirectory = Directory(destination);
     if (!await destinationDirectory.exists()) {
       throw const LibraryBackupException('备份位置不存在。');
     }
     _ensureOutsideManaged(destination);
+    final projected = await _projectedBytes(includeTrash, includeVideoOriginals);
+    await LocalDiskSpace.require(destinationDirectory, projected + _reserveBytes, '完整备份');
     final stamp = _backupStamp();
     var name = 'Quelyt-backup-$stamp';
     var counter = 2;
@@ -136,6 +148,7 @@ class LibraryBackupService {
       final staged = await _buildPackageInDirectory(
         temp,
         includeTrash: includeTrash,
+        includeVideoOriginals: includeVideoOriginals,
       );
       final finalDirectory = Directory(p.join(destination, name));
       await temp.rename(finalDirectory.path);
@@ -144,6 +157,7 @@ class LibraryBackupService {
         documents: staged.documents,
         bytes: staged.bytes,
         reviewAssets: staged.reviewAssets,
+        omittedVideos: staged.omittedVideos,
         includeTrash: includeTrash,
         warnings: staged.warnings,
       );
@@ -159,8 +173,10 @@ class LibraryBackupService {
     String destinationDirectoryPath, {
     String? fileName,
     bool includeTrash = true,
+    bool includeVideoOriginals = true,
   }) async {
     final destinationDirectory = Directory(destinationDirectoryPath);
+    _ensureOutsideManaged(destinationDirectory.path);
     if (!await destinationDirectory.exists()) {
       await destinationDirectory.create(recursive: true);
     }
@@ -184,15 +200,30 @@ class LibraryBackupService {
     final tempDir = await Directory.systemTemp.createTemp('quelyt_zip_backup_');
     final tempZipPath = '$targetPath.tmp';
     try {
+      final projected = await _projectedBytes(includeTrash, includeVideoOriginals);
+      if (projected > _maxZipUncompressedBytes) {
+        throw const LibraryBackupException('单个压缩包最多收录 128 GiB 内容。请使用完整文件夹备份或轻量备份。');
+      }
+      final sameDisk = !Platform.isWindows ||
+          p.rootPrefix(tempDir.absolute.path).toLowerCase() ==
+              p.rootPrefix(destinationDirectory.absolute.path).toLowerCase();
+      await LocalDiskSpace.require(tempDir, projected * (sameDisk ? 2 : 1) + _reserveBytes, '打包备份');
+      if (!sameDisk) {
+        await LocalDiskSpace.require(destinationDirectory, projected + _reserveBytes, '保存备份');
+      }
       final staged = await _buildPackageInDirectory(
         tempDir,
         includeTrash: includeTrash,
+        includeVideoOriginals: includeVideoOriginals,
       );
+      if (staged.bytes > _maxZipUncompressedBytes) {
+        throw const LibraryBackupException('备份内容超过单个压缩包的恢复容量。');
+      }
       final encoder = ZipFileEncoder();
       await encoder.zipDirectory(
         tempDir,
         filename: tempZipPath,
-        level: ZipFileEncoder.gzip,
+        level: ZipFileEncoder.store,
       );
       final zipFile = File(tempZipPath);
       await zipFile.rename(targetPath);
@@ -204,6 +235,7 @@ class LibraryBackupService {
         reviewAssets: staged.reviewAssets,
         includeTrash: includeTrash,
         isZip: true,
+        omittedVideos: staged.omittedVideos,
         warnings: staged.warnings,
       );
     } catch (_) {
@@ -230,10 +262,34 @@ class LibraryBackupService {
       .replaceAll('.', '')
       .replaceAll('-', '');
 
-  Future<({int documents, int reviewAssets, int bytes, List<String> warnings})>
+  Future<int> _projectedBytes(bool includeTrash, bool includeVideoOriginals) async {
+    var total = 0;
+    for (final doc in store.getDocuments(includeTrashed: includeTrash)) {
+      final file = File(doc.filePath);
+      if ((!doc.isVideo || includeVideoOriginals) && await file.exists()) total += await file.length();
+      if (doc.usesConvertedPreview) {
+        final preview = documents.previewFile(doc);
+        if (await preview.exists()) total += await preview.length();
+      }
+    }
+    final database = File(p.join(documents.directory.path, 'study.sqlite3'));
+    if (await database.exists()) total += await database.length();
+    final wal = File('${database.path}-wal');
+    if (await wal.exists()) total += await wal.length();
+    final assets = Directory(p.join(documents.directory.path, reviewAssetsDirName));
+    if (await assets.exists()) {
+      await for (final file in assets.list(followLinks: false)) {
+        if (file is File) total += await file.length();
+      }
+    }
+    return total;
+  }
+
+  Future<({int documents, int reviewAssets, int bytes, int omittedVideos, List<String> warnings})>
   _buildPackageInDirectory(
     Directory targetDir, {
     required bool includeTrash,
+    required bool includeVideoOriginals,
   }) async {
     final warnings = <String>[];
     final databaseFile = File(p.join(targetDir.path, databaseName));
@@ -245,6 +301,7 @@ class LibraryBackupService {
 
     final entries = <Map<String, Object?>>[];
     var bytes = databaseBytes;
+    var omittedVideos = 0;
     final documentsInBackup = store
         .getDocuments(includeTrashed: includeTrash)
         .toList();
@@ -255,6 +312,28 @@ class LibraryBackupService {
       }
       final relative = 'originals/${document.id}/original$extension';
       final source = File(document.filePath);
+      Map<String, Object?>? previewInfo;
+      if (document.usesConvertedPreview) {
+        final preview = documents.previewFile(document);
+        if (await preview.exists()) {
+          final previewName = document.isWord
+              ? WordConverter.previewName
+              : SlideConverter.previewName;
+          previewInfo = await _copyMember(
+            preview, targetDir, 'originals/${document.id}/$previewName',
+          );
+          bytes += previewInfo['size'] as int;
+        }
+      }
+      if (document.isVideo && !includeVideoOriginals) {
+        omittedVideos++;
+        warnings.add('${document.title}：轻量备份已省略视频，保留文件哈希与学习记录。');
+        entries.add({
+          'id': document.id, 'contentHash': document.contentHash, 'format': document.format,
+          'relativePath': null, 'omitted': true, 'missing': true, 'trashed': !document.isActive,
+        });
+        continue;
+      }
       if (!await source.exists()) {
         warnings.add('${document.title}：托管原件缺失，备份只含记录。');
         entries.add({
@@ -264,14 +343,27 @@ class LibraryBackupService {
           'relativePath': null,
           'missing': true,
           'trashed': !document.isActive,
+          'slidePreview': ?previewInfo,
         });
         continue;
       }
-      final targetFile = File(p.join(targetDir.path, relative));
-      await targetFile.parent.create(recursive: true);
-      await _copyStreaming(source, targetFile);
-      final hash = await _sha256(targetFile);
-      final size = await targetFile.length();
+      final size = await source.length();
+      final parts = <Map<String, Object?>>[];
+      final String hash;
+      if (document.isVideo && size > _volumeBytes) {
+        for (var offset = 0; offset < size; offset += _volumeBytes) {
+          final end = math.min(size, offset + _volumeBytes);
+          final number = (parts.length + 1).toString().padLeft(5, '0');
+          final part = '$relative.part-$number';
+          final file = File(p.join(targetDir.path, part));
+          await file.parent.create(recursive: true);
+          await _writeStream(file, source.openRead(offset, end));
+          parts.add({'relativePath': part, 'size': await file.length(), 'sha256': await _sha256(file)});
+        }
+        hash = (await sha256.bind(_readParts(targetDir.path, parts)).first).toString();
+      } else {
+        hash = (await _copyMember(source, targetDir, relative))['sha256'] as String;
+      }
       bytes += size;
       if (hash != document.contentHash) {
         warnings.add('${document.title}：托管副本与记录的哈希不一致。');
@@ -281,6 +373,8 @@ class LibraryBackupService {
         'contentHash': document.contentHash,
         'format': document.format,
         'relativePath': relative,
+        if (parts.isNotEmpty) 'parts': parts,
+        'slidePreview': ?previewInfo,
         'sha256': hash,
         'size': size,
         'missing': false,
@@ -359,6 +453,7 @@ class LibraryBackupService {
       'createdAt': DateTime.now().toIso8601String(),
       'schemaVersion': schemaVersion,
       'includeTrash': includeTrash,
+      'includeVideoOriginals': includeVideoOriginals,
       'database': {
         'relativePath': databaseName,
         'sha256': databaseHash,
@@ -373,7 +468,7 @@ class LibraryBackupService {
         'reviewAssets': assetEntries.where((entry) => entry['missing'] != true).length,
       },
       'note':
-          '研究数据、原件与复习图片；API Key 保存在系统凭据库，不进入备份。',
+          '学习数据、选定原件、幻灯片与已保存图片。系统凭据单独保管。',
     };
     await File(
       p.join(targetDir.path, manifestName),
@@ -392,6 +487,7 @@ class LibraryBackupService {
       documents: entries.length,
       reviewAssets: assetEntries.where((entry) => entry['missing'] != true).length,
       bytes: bytes,
+      omittedVideos: omittedVideos,
       warnings: warnings,
     );
   }
@@ -554,15 +650,66 @@ class LibraryBackupService {
       }
     }
     final entries = manifest['documents'];
+    final documentIds = <String>{};
     if (entries is! List) {
       errors.add('清单缺少资料列表。');
     } else {
       for (final value in entries) {
-        if (value is! Map) continue;
+        if (value is! Map || value['id'] is! String ||
+            !RegExp(r'^[A-Za-z0-9_.-]{1,128}$').hasMatch(value['id'] as String) ||
+            const {'.', '..'}.contains(value['id']) ||
+            !documentIds.add((value['id'] as String).toLowerCase())) {
+          errors.add('资料标识无效或重复。');
+          continue;
+        }
         documents++;
+        final slide = value['slidePreview'];
+        if (slide is Map) {
+          final metadata = Map<String, Object?>.from(slide);
+          final allowed = {
+            'originals/${value['id']}/${SlideConverter.previewName}',
+            'originals/${value['id']}/${WordConverter.previewName}',
+          };
+          if (!allowed.contains(metadata['relativePath'])) {
+            errors.add('文档预览路径无效。');
+          } else {
+            bytes += await _validateMember(directoryPath, metadata, errors);
+          }
+        }
+        final parts = value['parts'];
+        if (parts is List && parts.isNotEmpty) {
+          if (!const {'mp4', 'mkv', 'webm'}.contains(value['format']) || parts.length > _maxZipEntries) {
+            errors.add('视频分卷清单无效。');
+            continue;
+          }
+          final checked = <Map<String, Object?>>[];
+          var size = 0;
+          final original = value['relativePath'];
+          for (final part in parts) {
+            final index = (checked.length + 1).toString().padLeft(5, '0');
+            if (part is! Map || part['relativePath'] != '$original.part-$index' ||
+                part['size'] is! int || (part['size'] as int) > _volumeBytes) {
+              errors.add('视频分卷名称、大小或顺序无效。');
+              break;
+            }
+            final metadata = Map<String, Object?>.from(part);
+            final measured = await _validateMember(directoryPath, metadata, errors);
+            if (measured == 0) break;
+            size += measured;
+            checked.add(metadata);
+          }
+          bytes += size;
+          if (checked.length != parts.length || size != value['size']) {
+            errors.add('视频分卷不完整。');
+          } else if (value['sha256'] != (await sha256.bind(_readParts(directoryPath, checked)).first).toString() ||
+              value['contentHash'] != value['sha256']) {
+            errors.add('拼接后的视频哈希与记录不符。');
+          }
+          continue;
+        }
         final relative = value['relativePath'] as String?;
         if (relative == null || value['missing'] == true) {
-          warnings.add('清单中有资料缺少原件。');
+          warnings.add(value['omitted'] == true ? '轻量备份已省略视频原件。' : '清单中有资料缺少原件。');
           continue;
         }
         final resolved = _resolveWithinRoot(directoryPath, relative);
@@ -656,6 +803,7 @@ class LibraryBackupService {
     }
     final library = Directory(libraryDirectory);
     await library.create(recursive: true);
+    await LocalDiskSpace.require(library, validation.bytes * 2 + _reserveBytes, '暂存并恢复备份');
     final staging = Directory(p.join(library.path, _stagingName));
     if (await staging.exists()) await staging.delete(recursive: true);
     await staging.create(recursive: true);
@@ -673,14 +821,21 @@ class LibraryBackupService {
         );
         for (final value in validation.manifest!['documents'] as List) {
           if (value is! Map) continue;
-          final relative = value['relativePath'] as String?;
-          if (relative == null || value['missing'] == true) continue;
-          final src = _resolveWithinRoot(packagePath, relative);
-          final dst = _resolveWithinRoot(staging.path, relative);
-          if (src == null || dst == null) {
-            throw LibraryBackupException('备份原件路径非法：$relative');
+          final members = <String>[
+            if (value['slidePreview'] case final Map slide) slide['relativePath'] as String,
+            if (value['parts'] case final List parts)
+              for (final part in parts) (part as Map)['relativePath'] as String
+            else if (value['missing'] != true && value['relativePath'] is String)
+              value['relativePath'] as String,
+          ];
+          for (final relative in members) {
+            final src = _resolveWithinRoot(packagePath, relative);
+            final dst = _resolveWithinRoot(staging.path, relative);
+            if (src == null || dst == null) {
+              throw LibraryBackupException('备份原件路径非法：$relative');
+            }
+            await _copyFile(File(src), File(dst));
           }
-          await _copyFile(File(src), File(dst));
         }
         final assetsList = validation.manifest!['reviewAssets'];
         if (assetsList is List) {
@@ -787,17 +942,32 @@ class LibraryBackupService {
       await documentsDirectory.create(recursive: true);
       for (final value in validation.manifest!['documents'] as List) {
         if (value is! Map) continue;
+        final id = value['id'] as String;
+        if (value['slidePreview'] case final Map slide) {
+          final relativePreview = slide['relativePath'] as String;
+          final preview = _resolveWithinRoot(validation.path, relativePreview);
+          if (preview == null) throw const LibraryBackupException('文档预览路径非法。');
+          final targetName = p.basename(relativePreview);
+          await _copyFile(File(preview), File(p.join(documentsDirectory.path, id, targetName)));
+        }
         final relative = value['relativePath'] as String?;
         if (relative == null) continue;
-        final safeSrc = _resolveWithinRoot(validation.path, relative);
-        if (safeSrc == null) continue;
-        final id = value['id'] as String;
         final extension = p.extension(relative);
         final target = File(
           p.join(documentsDirectory.path, id, 'original$extension'),
         );
         await target.parent.create(recursive: true);
-        await _copyFile(File(safeSrc), target);
+        if (value['parts'] case final List parts when parts.isNotEmpty) {
+          await _writeStream(target, _readParts(validation.path,
+            parts.map((part) => Map<String, Object?>.from(part as Map))));
+          if (await _sha256(target) != value['contentHash']) {
+            throw const LibraryBackupException('恢复的视频校验失败。');
+          }
+        } else {
+          final safeSrc = _resolveWithinRoot(validation.path, relative);
+          if (safeSrc == null) throw const LibraryBackupException('原件路径非法。');
+          await _copyFile(File(safeSrc), target);
+        }
       }
       final reviewAssetsDirectory = Directory(
         p.join(library.path, reviewAssetsDirName),
@@ -1020,6 +1190,50 @@ class LibraryBackupService {
   static Future<String> _sha256(File file) async =>
       (await sha256.bind(file.openRead()).first).toString();
 
+  static Future<Map<String, Object?>> _copyMember(File source, Directory root, String relative) async {
+    final file = File(p.join(root.path, relative));
+    await _copyFile(source, file);
+    return {'relativePath': relative, 'size': await file.length(), 'sha256': await _sha256(file)};
+  }
+
+  static Future<int> _validateMember(String root, Map<String, Object?> item, List<String> errors) async {
+    final relative = item['relativePath'];
+    final path = relative is String ? _resolveWithinRoot(root, relative) : null;
+    if (path == null) {
+      errors.add('备份文件路径无效：$relative');
+      return 0;
+    }
+    final file = File(path);
+    if (!await file.exists()) {
+      errors.add('缺少备份文件：$relative');
+      return 0;
+    }
+    final size = await file.length();
+    if (size <= 0 || size != item['size'] || await _sha256(file) != item['sha256']) {
+      errors.add('备份文件的大小或哈希不符：$relative');
+      return 0;
+    }
+    return size;
+  }
+
+  static Stream<List<int>> _readParts(String root, Iterable<Map<String, Object?>> parts) async* {
+    for (final part in parts) {
+      final path = _resolveWithinRoot(root, part['relativePath'] as String);
+      if (path == null) throw const LibraryBackupException('视频分卷路径无效。');
+      yield* File(path).openRead();
+    }
+  }
+
+  static Future<void> _writeStream(File target, Stream<List<int>> content) async {
+    final sink = target.openWrite();
+    try {
+      await sink.addStream(content);
+      await sink.flush();
+    } finally {
+      await sink.close();
+    }
+  }
+
   static Future<void> _copyStreaming(File source, File target) async {
     final reader = await source.open();
     final writer = await target.open(mode: FileMode.write);
@@ -1094,7 +1308,15 @@ class LibraryBackupService {
     await dest.create(recursive: true);
     final input = InputFileStream(zipPath);
     try {
-      final archive = ZipDecoder().decodeStream(input, verify: true);
+      final archive = ZipDecoder().decodeStream(input);
+      final declared = archive.where((entry) => entry.isFile).fold<int>(
+        0, (total, entry) => total + entry.size,
+      );
+      if (declared < 0 || declared > _maxZipUncompressedBytes) {
+        throw const LibraryBackupException('备份压缩包解压体积超过容量上限。');
+      }
+      await LocalDiskSpace.require(dest, declared + _reserveBytes, '解压备份');
+      final visited = <String>{};
       var entryCount = 0;
       var totalUncompressed = 0;
       for (final entry in archive) {
@@ -1114,6 +1336,9 @@ class LibraryBackupService {
         if (targetPath == null) {
           throw LibraryBackupException('备份压缩包包含非法路径：${entry.name}');
         }
+        if (!visited.add(targetPath.toLowerCase())) {
+          throw const LibraryBackupException('备份压缩包包含重复路径。');
+        }
         if (entry.isDirectory) {
           await Directory(targetPath).create(recursive: true);
           continue;
@@ -1131,6 +1356,9 @@ class LibraryBackupService {
           await output.close();
         }
         final actualSize = await outFile.length();
+        if (actualSize != entry.size) {
+          throw const LibraryBackupException('备份条目的实际解压大小与清单不符。');
+        }
         totalUncompressed = totalUncompressed - entry.size + actualSize;
         if (totalUncompressed > _maxZipUncompressedBytes) {
           throw const LibraryBackupException('备份压缩包解压体积超过安全上限。');

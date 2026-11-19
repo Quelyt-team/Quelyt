@@ -23,8 +23,7 @@ const List<int> folderPalette = <int>[
   0xFF57534E, // stone
 ];
 
-Color? folderColorValue(int? value) =>
-    value == null ? null : Color(value);
+Color? folderColorValue(int? value) => value == null ? null : Color(value);
 
 /// Resolves inherited colour by walking ancestors. The state, not the copied
 /// value, decides inheritance, so a later parent change still reaches children
@@ -47,14 +46,315 @@ Color folderInk(BuildContext context, int? value) {
   return value == null ? colors.inkMuted : Color(value);
 }
 
-QIconData documentIcon(String format) => switch (format.toLowerCase()) {
-  'pdf' => QIcons.paper,
-  'png' || 'jpg' || 'jpeg' => QIcons.region,
-  _ => QIcons.paper,
+/// Normalizes a format string or falls back to the extension of [originalName]
+/// / [filePath] when a legacy record has an empty `format` column.
+String resolveFormatExtension(
+  String format, {
+  String? originalName,
+  String? filePath,
+}) {
+  String clean(String raw) {
+    final trimmed = raw.trim().toLowerCase();
+    return trimmed.startsWith('.') ? trimmed.substring(1) : trimmed;
+  }
+
+  final direct = clean(format);
+  if (direct.isNotEmpty) return direct;
+
+  String extFromPath(String? path) {
+    if (path == null || path.isEmpty) return '';
+    final normalized = path.replaceAll('\\', '/');
+    final name = normalized.split('/').last;
+    final dot = name.lastIndexOf('.');
+    if (dot <= 0 || dot == name.length - 1) return '';
+    return clean(name.substring(dot + 1));
+  }
+
+  final fromOriginal = extFromPath(originalName);
+  if (fromOriginal.isNotEmpty) return fromOriginal;
+  return extFromPath(filePath);
+}
+
+String documentFormat(DocumentRecord document) => resolveFormatExtension(
+  document.format,
+  originalName: document.originalName,
+  filePath: document.filePath,
+);
+
+QIconData documentIcon(String format) => switch (resolveFormatExtension(format)) {
+  'pdf' => QIcons.filePdf,
+  'doc' || 'docx' => QIcons.fileWord,
+  'png' || 'jpg' || 'jpeg' => QIcons.fileImage,
+  'ppt' || 'pptx' => QIcons.fileSlides,
+  'mp4' || 'webm' || 'mkv' => QIcons.fileVideo,
+  _ => QIcons.fileGeneric,
 };
 
-String formatLabel(String format) =>
-    format.isEmpty ? '文件' : format.toUpperCase();
+String formatLabel(String format) {
+  final ext = resolveFormatExtension(format);
+  if (ext.isEmpty) return '文件';
+  if (ext == 'jpeg') return 'JPG';
+  return ext.toUpperCase();
+}
+
+@immutable
+class DocumentFormatVisual {
+  const DocumentFormatVisual({
+    required this.icon,
+    required this.label,
+    required this.ink,
+    required this.background,
+    required this.border,
+  });
+
+  final QIconData icon;
+  final String label;
+  final Color ink;
+  final Color background;
+  final Color border;
+}
+
+DocumentFormatVisual documentFormatVisual(
+  BuildContext context,
+  String format, {
+  String? originalName,
+  String? filePath,
+}) {
+  final colors = context.colors;
+  final dark = colors.isDark;
+  final ext = resolveFormatExtension(
+    format,
+    originalName: originalName,
+    filePath: filePath,
+  );
+  final label = formatLabel(ext);
+  return switch (ext) {
+    'pdf' => DocumentFormatVisual(
+      icon: QIcons.filePdf,
+      label: label,
+      ink: dark ? const Color(0xFFF87171) : const Color(0xFFC81E1E),
+      background: dark ? const Color(0xFF2A1515) : const Color(0xFFFEF2F2),
+      border: dark ? const Color(0xFF5C2323) : const Color(0xFFFECACA),
+    ),
+    'doc' || 'docx' => DocumentFormatVisual(
+      icon: QIcons.fileWord,
+      label: label,
+      ink: dark ? const Color(0xFF60A5FA) : const Color(0xFF1D4ED8),
+      background: dark ? const Color(0xFF142038) : const Color(0xFFEFF6FF),
+      border: dark ? const Color(0xFF274170) : const Color(0xFFBFDBFE),
+    ),
+    'ppt' || 'pptx' => DocumentFormatVisual(
+      icon: QIcons.fileSlides,
+      label: label,
+      ink: dark ? const Color(0xFFFB923C) : const Color(0xFFC2410C),
+      background: dark ? const Color(0xFF2B1B10) : const Color(0xFFFFF7ED),
+      border: dark ? const Color(0xFF5C3419) : const Color(0xFFFED7AA),
+    ),
+    'png' => DocumentFormatVisual(
+      icon: QIcons.fileImage,
+      label: label,
+      ink: dark ? const Color(0xFF2DD4BF) : const Color(0xFF0F766E),
+      background: dark ? const Color(0xFF0F2624) : const Color(0xFFF0FDFA),
+      border: dark ? const Color(0xFF1E4D47) : const Color(0xFF99F6E4),
+    ),
+    'jpg' || 'jpeg' => DocumentFormatVisual(
+      icon: QIcons.fileImage,
+      label: label,
+      ink: dark ? const Color(0xFF4ADE80) : const Color(0xFF15803D),
+      background: dark ? const Color(0xFF102618) : const Color(0xFFF0FDF4),
+      border: dark ? const Color(0xFF1E4D2B) : const Color(0xFFBBF7D0),
+    ),
+    'mp4' => DocumentFormatVisual(
+      icon: QIcons.fileVideo,
+      label: label,
+      ink: dark ? const Color(0xFFA78BFA) : const Color(0xFF6D28D9),
+      background: dark ? const Color(0xFF201833) : const Color(0xFFF5F3FF),
+      border: dark ? const Color(0xFF413066) : const Color(0xFFDDD6FE),
+    ),
+    'webm' => DocumentFormatVisual(
+      icon: QIcons.fileVideo,
+      label: label,
+      ink: dark ? const Color(0xFF38BDF8) : const Color(0xFF0369A1),
+      background: dark ? const Color(0xFF102330) : const Color(0xFFF0F9FF),
+      border: dark ? const Color(0xFF1D4660) : const Color(0xFFBAE6FD),
+    ),
+    'mkv' => DocumentFormatVisual(
+      icon: QIcons.fileVideo,
+      label: label,
+      ink: dark ? const Color(0xFFE879F9) : const Color(0xFFA21CAF),
+      background: dark ? const Color(0xFF2B1530) : const Color(0xFFFDF4FF),
+      border: dark ? const Color(0xFF572461) : const Color(0xFFF5D0FE),
+    ),
+    _ => DocumentFormatVisual(
+      icon: QIcons.fileGeneric,
+      label: label,
+      ink: colors.inkMuted,
+      background: colors.surfaceRaised,
+      border: colors.outline,
+    ),
+  };
+}
+
+/// Square tinted file-format tile used in library rows, trash, and import queue.
+class DocumentFormatIcon extends StatelessWidget {
+  const DocumentFormatIcon({
+    super.key,
+    required this.format,
+    this.originalName,
+    this.filePath,
+    this.size = 30,
+    this.iconSize = 16,
+    this.isShortcut = false,
+  });
+
+  factory DocumentFormatIcon.forDocument(
+    DocumentRecord document, {
+    Key? key,
+    double size = 30,
+    double iconSize = 16,
+    bool isShortcut = false,
+  }) => DocumentFormatIcon(
+    key: key,
+    format: document.format,
+    originalName: document.originalName,
+    filePath: document.filePath,
+    size: size,
+    iconSize: iconSize,
+    isShortcut: isShortcut,
+  );
+
+  final String format;
+  final String? originalName;
+  final String? filePath;
+  final double size;
+  final double iconSize;
+  final bool isShortcut;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final visual = documentFormatVisual(
+      context,
+      format,
+      originalName: originalName,
+      filePath: filePath,
+    );
+    final radius = (size * .24).clamp(5.0, 10.0).toDouble();
+    final tile = Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: visual.background,
+        borderRadius: BorderRadius.circular(radius),
+        border: Border.all(color: visual.border),
+      ),
+      child: Center(
+        child: QIcon(
+          visual.icon,
+          size: iconSize,
+          color: visual.ink,
+          active: visual.icon == QIcons.fileVideo,
+        ),
+      ),
+    );
+    if (!isShortcut) return tile;
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          tile,
+          Positioned(
+            right: -2,
+            bottom: -2,
+            child: Tooltip(
+              message: '快捷方式：共享原资料',
+              child: Container(
+                width: 13,
+                height: 13,
+                decoration: BoxDecoration(
+                  color: colors.surface,
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: colors.outline),
+                ),
+                child: Center(
+                  child: QIcon(
+                    QIcons.shortcut,
+                    size: 9,
+                    color: colors.inkMuted,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Compact format pill (e.g. PDF / PPTX / PNG / MP4) with matching format tint.
+class DocumentFormatTag extends StatelessWidget {
+  const DocumentFormatTag({
+    super.key,
+    required this.format,
+    this.originalName,
+    this.filePath,
+    this.compact = false,
+  });
+
+  factory DocumentFormatTag.forDocument(
+    DocumentRecord document, {
+    Key? key,
+    bool compact = false,
+  }) => DocumentFormatTag(
+    key: key,
+    format: document.format,
+    originalName: document.originalName,
+    filePath: document.filePath,
+    compact: compact,
+  );
+
+  final String format;
+  final String? originalName;
+  final String? filePath;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final visual = documentFormatVisual(
+      context,
+      format,
+      originalName: originalName,
+      filePath: filePath,
+    );
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 5.5 : 7,
+        vertical: compact ? 1.5 : 2,
+      ),
+      decoration: BoxDecoration(
+        color: visual.background,
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: visual.border),
+      ),
+      child: Text(
+        visual.label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: context.texts.labelSmall!.copyWith(
+          fontSize: compact ? 10 : 11,
+          height: 1.2,
+          letterSpacing: 0.2,
+          color: visual.ink,
+          fontWeight: FontWeight.w600,
+          fontFeatures: AppNumerals.tabular,
+        ),
+      ),
+    );
+  }
+}
 
 String formatSize(int bytes) {
   if (bytes <= 0) return '大小未知';
@@ -77,6 +377,8 @@ String processingLabel(DocumentRecord document, LibraryController controller) {
     case DocumentLifecycle.active:
       break;
   }
+  if (document.isVideo) return '视频';
+  if (document.conversionIssue != null) return '待转换';
   final progress = controller.progressFor(document.id);
   if (!progress.hasPages) return '待处理';
   if (progress.ready == 0) return '待识别';
@@ -128,7 +430,11 @@ class LibraryDragPayload {
 }
 
 class LibraryDragFeedback extends StatelessWidget {
-  const LibraryDragFeedback({super.key, required this.label, required this.icon});
+  const LibraryDragFeedback({
+    super.key,
+    required this.label,
+    required this.icon,
+  });
 
   final String label;
   final QIconData icon;

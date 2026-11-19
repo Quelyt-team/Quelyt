@@ -81,6 +81,8 @@ class BookQaService {
       question,
       focusPage: currentPage,
       currentPageOnly: mode == BookAskMode.currentPage,
+      maxEvidence: 6,
+      maxCharacters: 9000,
     );
     return client.prepare(
       settings: settings,
@@ -165,7 +167,6 @@ class BookQaService {
       onStage?.call(BookQaStage.searchingWeb);
       final outcome = await provider.search(
         query,
-        originalQuestion: request.question,
         count: 5,
       );
       switch (outcome.state) {

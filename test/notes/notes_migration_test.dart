@@ -1,4 +1,4 @@
-﻿import 'dart:convert';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -86,7 +86,7 @@ void main() {
 
     final store = LocalStore.open(temp.path);
     addTearDown(store.dispose);
-    expect(store.schemaVersion, 10);
+    expect(store.schemaVersion, 11);
     final repository = NotesRepository(store);
     final migrated = repository.getNote('old-note')!;
     expect(migrated.title, '为什么聚合物多以头尾键连为主？');

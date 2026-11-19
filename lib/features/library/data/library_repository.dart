@@ -26,11 +26,9 @@ class LibraryRepository {
   // ---------------------------------------------------------------------------
 
   List<LibraryFolder> folders({bool includeDeleted = false}) {
-    final rows = store.selectRows(
-      '''SELECT data FROM library_folders
+    final rows = store.selectRows('''SELECT data FROM library_folders
       ${includeDeleted ? '' : 'WHERE deleted_at IS NULL'}
-      ORDER BY sort_key, name_norm, id''',
-    );
+      ORDER BY sort_key, name_norm, id''');
     return rows.map(_folder).toList();
   }
 
@@ -42,11 +40,7 @@ class LibraryRepository {
     return rows.isEmpty ? null : _folder(rows.first);
   }
 
-  bool folderNameExists(
-    String? parentId,
-    String name, {
-    String? exceptId,
-  }) {
+  bool folderNameExists(String? parentId, String name, {String? exceptId}) {
     final rows = store.selectRows(
       '''SELECT id FROM library_folders
       WHERE COALESCE(parent_id, '') = ? AND name_norm = ?
@@ -243,12 +237,10 @@ class LibraryRepository {
       [batchId],
     );
     if (folders.isNotEmpty) return true;
-    return store
-        .selectRows(
-          'SELECT 1 FROM documents WHERE deleted_batch = ? LIMIT 1',
-          [batchId],
-        )
-        .isNotEmpty;
+    return store.selectRows(
+      'SELECT 1 FROM documents WHERE deleted_batch = ? LIMIT 1',
+      [batchId],
+    ).isNotEmpty;
   }
 
   DocumentEntry? entryInFolder(String? folderId, String documentId) {
@@ -424,27 +416,33 @@ class LibraryRepository {
   // ---------------------------------------------------------------------------
 
   LibraryCounts counts() {
-    final activeDocuments = store
-        .selectRows("SELECT COUNT(*) AS value FROM documents WHERE lifecycle = 'active'")
-        .first['value'] as int;
-    final unfiled = store
-        .selectRows(
-          '''SELECT COUNT(*) AS value FROM document_entries e
+    final activeDocuments =
+        store
+                .selectRows(
+                  "SELECT COUNT(*) AS value FROM documents WHERE lifecycle = 'active'",
+                )
+                .first['value']
+            as int;
+    final unfiled =
+        store.selectRows('''SELECT COUNT(*) AS value FROM document_entries e
           JOIN documents d ON d.id = e.document_id
           WHERE e.folder_id IS NULL AND e.deleted_at IS NULL
-            AND d.lifecycle = 'active' AND e.is_shortcut = 0''',
-        )
-        .first['value'] as int;
-    final starred = store
-        .selectRows(
-          "SELECT COUNT(*) AS value FROM documents WHERE lifecycle = 'active' AND starred = 1",
-        )
-        .first['value'] as int;
-    final trash = store
-        .selectRows(
-          "SELECT COUNT(*) AS value FROM documents WHERE lifecycle != 'active'",
-        )
-        .first['value'] as int;
+            AND d.lifecycle = 'active' AND e.is_shortcut = 0''').first['value']
+            as int;
+    final starred =
+        store
+                .selectRows(
+                  "SELECT COUNT(*) AS value FROM documents WHERE lifecycle = 'active' AND starred = 1",
+                )
+                .first['value']
+            as int;
+    final trash =
+        store
+                .selectRows(
+                  "SELECT COUNT(*) AS value FROM documents WHERE lifecycle != 'active'",
+                )
+                .first['value']
+            as int;
     final folders = <String, int>{};
     for (final row in store.selectRows(
       '''SELECT e.folder_id AS folder_id, COUNT(*) AS value
@@ -579,12 +577,14 @@ class LibraryRepository {
                 )
                 .first['value']
             as int;
-    final bytes = store
-        .selectRows(
-          'SELECT COALESCE(SUM(size_bytes), 0) AS value FROM documents WHERE id IN ($placeholders)',
-          ids,
-        )
-        .first['value'] as int;
+    final bytes =
+        store
+                .selectRows(
+                  'SELECT COALESCE(SUM(size_bytes), 0) AS value FROM documents WHERE id IN ($placeholders)',
+                  ids,
+                )
+                .first['value']
+            as int;
     final tasks = count('study_tasks', 'material_document_id');
     final planSources = count('plan_sources', 'document_id');
     final bookQa = count('book_qa_conversations', 'document_id');
@@ -607,13 +607,11 @@ class LibraryRepository {
     final ids = folderIds.toList();
     if (ids.isEmpty) return const LibraryPurgeImpact();
     final placeholders = List.filled(ids.length, '?').join(',');
-    final entries = store
-        .selectRows(
-          '''SELECT document_id, id FROM document_entries
+    final entries = store.selectRows(
+      '''SELECT document_id, id FROM document_entries
           WHERE deleted_at IS NOT NULL AND folder_id IN ($placeholders)''',
-          ids,
-        )
-        .toList();
+      ids,
+    ).toList();
     final documentIds = <String>{
       for (final row in entries)
         if (row['document_id'] is String) row['document_id'] as String,
@@ -665,9 +663,7 @@ class LibraryRepository {
     );
     for (final row in rows) {
       final entry = _entry(row);
-      updateEntry(
-        entry.copyWith(deletedBatch: batchId, deletedAt: at),
-      );
+      updateEntry(entry.copyWith(deletedBatch: batchId, deletedAt: at));
     }
     return rows.length;
   }
@@ -677,11 +673,8 @@ class LibraryRepository {
     if (ids.isEmpty) return const [];
     final placeholders = List.filled(ids.length, '?').join(',');
     return store
-        .selectRows(
-          '''SELECT data FROM document_entries
-          WHERE deleted_at IS NULL AND folder_id IN ($placeholders)''',
-          ids,
-        )
+        .selectRows('''SELECT data FROM document_entries
+          WHERE deleted_at IS NULL AND folder_id IN ($placeholders)''', ids)
         .map(_entry)
         .toList();
   }
@@ -718,6 +711,23 @@ class LibraryRepository {
       .where((document) => !document.isActive)
       .toList();
 
+  List<DocumentRecord> relatedMaterials(String id) {
+    final rows = store.selectRows(
+      '''SELECT CASE WHEN source_id = ? THEN document_id ELSE source_id END AS related
+         FROM material_outputs
+         WHERE source_id = ? OR document_id = ?
+         GROUP BY related
+         ORDER BY MAX(created_at) DESC''',
+      [id, id, id],
+    );
+    return [
+      for (final row in rows)
+        if (store.getDocument(row['related'] as String) case final document?
+            when document.isActive)
+          document,
+    ];
+  }
+
   /// Permanently removes documents and their derived data. Schedules keep their
   /// wording and history; the material reference is marked missing just like the
   /// original delete path, so a plan never shows a clickable dead textbook.
@@ -753,10 +763,9 @@ class LibraryRepository {
   }
 
   void purgeEntriesInBatch(String batchId) {
-    store.executeSql(
-      'DELETE FROM document_entries WHERE deleted_batch = ?',
-      [batchId],
-    );
+    store.executeSql('DELETE FROM document_entries WHERE deleted_batch = ?', [
+      batchId,
+    ]);
   }
 
   void purgeFolders(Iterable<String> folderIds) {
@@ -790,7 +799,8 @@ class LibraryRepository {
       return level;
     }
 
-    final ordered = ids.toList()..sort((a, b) => depthOf(b).compareTo(depthOf(a)));
+    final ordered = ids.toList()
+      ..sort((a, b) => depthOf(b).compareTo(depthOf(a)));
     for (final id in ordered) {
       // Folders in other deletion batches may still point at this parent.
       // Keep them restorable at the root instead of failing a foreign key.

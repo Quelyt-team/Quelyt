@@ -9,6 +9,9 @@ import 'package:uuid/uuid.dart';
 
 import 'core/local_store.dart';
 import 'core/models.dart';
+import 'features/materials/material_classification.dart';
+import 'features/materials/material_work.dart';
+import 'features/materials/paper/paper_metadata.dart';
 import 'core/search_index.dart';
 import 'features/library/services/library_backup_service.dart';
 import 'features/notes/data/notes_repository.dart';
@@ -87,6 +90,7 @@ class StudyController extends ChangeNotifier {
     required this.ocr,
   }) {
     noteRepository = NotesRepository(store);
+    materialWork = MaterialWork(store: store, documents: documents, transport: gateway.transport);
     reviewRepository = ReviewRepository(store);
     reviewAi = ReviewAiService(gateway: gateway);
     reviewController = ReviewController(
@@ -134,6 +138,7 @@ class StudyController extends ChangeNotifier {
       documents: documents,
       gateway: AiGateway(),
     );
+    controller.materialWork.recoverInterrupted();
     try {
       await documents.repairManagedPaths();
     } catch (_) {
@@ -150,6 +155,40 @@ class StudyController extends ChangeNotifier {
 
   final LocalStore store;
   late final NotesRepository noteRepository;
+  late final MaterialWork materialWork;
+
+  Future<void> catalogPaper(DocumentRecord document) => _track(() async {
+    if (document.kind != DocumentKind.paper && document.suggestedKind != DocumentKind.paper) return;
+    final service = PaperMetadataService(materialWork);
+    if (service.read(document) != null) return;
+    try {
+      final local = await service.extract(document);
+      service.save(document, local);
+      if (store.getSetting('paperLookupOnImport') != 'true' || _disposed) return;
+      final candidates = await service.lookup(service.lookupUri(local.fields), local.fields);
+      final matches = candidates.where((item) => service.match(local.fields, item) >= .54).toList();
+      if (matches.length == 1 && service.match(local.fields, matches.single) >= .92) {
+        service.save(document, matches.single);
+      }
+    } catch (_) {
+      // Keep the local bibliography when the document is removed or offline.
+    }
+  });
+
+  Future<List<MaterialResult>> runMaterialWork(
+    PreparedMaterialWork request, {
+    required int budget,
+    required bool Function() paused,
+    required void Function(MaterialProgress) onProgress,
+  }) async {
+    List<MaterialResult> result = const [];
+    await _track(() async {
+      result = await materialWork.run(request,
+        tokenBudget: budget, paused: paused, onProgress: onProgress);
+    });
+    _emit();
+    return result;
+  }
   late final ReviewRepository reviewRepository;
   late final ReviewAiService reviewAi;
   late final ReviewController reviewController;
@@ -160,6 +199,8 @@ class StudyController extends ChangeNotifier {
   DocumentRecord? current;
   OpenDocument? opened;
   RenderedPage? raster;
+  int? videoJumpMs;
+  int videoJumpRevision = 0;
   SourceRegion? selection;
   SourceRegion? highlight;
   int page = 1;
@@ -246,6 +287,7 @@ class StudyController extends ChangeNotifier {
   Future<void> setLearningMode(DocumentKind kind) => _track(() async {
     final record = current;
     if (record == null || record.kind == kind) return;
+    if (record.isVideo != (kind == DocumentKind.video)) return;
     final updated = store.setDocumentLearningMode(record.id, kind);
     if (current?.id == updated.id) {
       current = updated;
@@ -297,9 +339,12 @@ class StudyController extends ChangeNotifier {
           throw StateError('资料在回收站里，恢复后才能打开。');
         }
         final active = latest.copyWith(lastOpenedAt: DateTime.now());
-        candidate = await documents.open(active);
+        final shouldOpenPages = !active.isVideo &&
+            (!active.usesConvertedPreview ||
+                await documents.previewFile(active).exists());
+        if (shouldOpenPages) candidate = await documents.open(active);
         if (token != _generation || _disposed) {
-          await candidate.dispose();
+          await candidate?.dispose();
           candidate = null;
           return;
         }
@@ -315,10 +360,11 @@ class StudyController extends ChangeNotifier {
         selection = null;
         highlight = null;
         raster = null;
+        videoJumpMs = null;
         replies = _history(active.id);
         final previous = store.getSessions(active.id);
         session = previous.isEmpty ? null : previous.first;
-        await goToPage(page);
+        if (shouldOpenPages) await goToPage(page);
         if (token != _generation || _disposed) return;
         paused = false;
         startIndexing();
@@ -339,6 +385,24 @@ class StudyController extends ChangeNotifier {
     _transition = task;
     return task;
   }
+
+  Future<void> retrySlides() => _track(() async {
+    final document = current;
+    if (document == null || !document.usesConvertedPreview || loading) return;
+    loading = true;
+    _emit();
+    try {
+      final updated = await documents.retrySlideConversion(document);
+      if (current?.id == document.id && !_disposed) await open(updated);
+    } catch (e) {
+      if (current?.id == document.id) error = '转换未完成：$e';
+    } finally {
+      if (current?.id == document.id) {
+        loading = false;
+        _emit();
+      }
+    }
+  });
 
   Future<bool> restoreSession(String sessionId, {int? page}) async {
     final record = current;
@@ -459,6 +523,17 @@ class StudyController extends ChangeNotifier {
           _emit();
           await documents.indexPage(document, next);
           if (token != _generation || _disposed) break;
+          if (next == 1) {
+            final latest = store.getDocument(document.record.id);
+            if (latest != null && latest.kind == DocumentKind.unspecified &&
+                latest.suggestedKind == null && latest.isActive) {
+              final mode = suggestPageMode(store.getPage(latest.id, 1)?.text ?? '');
+              if (mode != null) {
+                current = latest.copyWith(suggestedKind: mode);
+                store.saveDocumentRecord(current!);
+              }
+            }
+          }
           _emit();
           await Future<void>.delayed(Duration.zero);
         }
@@ -988,7 +1063,14 @@ class StudyController extends ChangeNotifier {
     }
     if (current?.id != doc.id) await open(doc);
     if (current?.id == doc.id && !_disposed) {
-      await goToPage(evidence.page, region: evidence.region);
+      if (doc.isVideo && evidence.timeMs != null) {
+        videoJumpMs = evidence.timeMs;
+        videoJumpRevision++;
+        highlight = evidence.region;
+        _emit();
+      } else {
+        await goToPage(evidence.page, region: evidence.region);
+      }
     }
   }
 

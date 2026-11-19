@@ -779,3 +779,52 @@ CREATE TABLE review_asset_refs (
 CREATE INDEX review_asset_refs_owner ON review_asset_refs(owner_type, owner_id);
 CREATE INDEX review_asset_refs_path ON review_asset_refs(asset_path);
 ''';
+
+/// Version 11 keeps historical document, note, and citation IDs intact.
+/// Existing positioned text is regrouped on retrieval without rewriting old
+/// citation snapshots. New imports also index grouped lines.
+const String schemaVersion11 = '''
+CREATE TABLE answer_note_saves (
+  selection_key TEXT NOT NULL,
+  target_key TEXT NOT NULL,
+  note_id TEXT NOT NULL REFERENCES note_documents(id) ON DELETE CASCADE,
+  PRIMARY KEY (selection_key, target_key)
+);
+
+CREATE TABLE material_state (
+  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  document_hash TEXT NOT NULL,
+  slot TEXT NOT NULL,
+  data TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (document_id, document_hash, slot)
+);
+
+CREATE TABLE material_items (
+  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  document_hash TEXT NOT NULL,
+  task TEXT NOT NULL,
+  item_key TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('running', 'ready', 'verify', 'failed', 'unknown')),
+  input_budget INTEGER NOT NULL,
+  output_budget INTEGER NOT NULL,
+  usage TEXT,
+  result TEXT,
+  issue TEXT,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (document_id, document_hash, task, item_key)
+);
+CREATE INDEX material_items_progress
+  ON material_items(document_id, document_hash, task, state);
+
+CREATE TABLE material_outputs (
+  output_key TEXT PRIMARY KEY,
+  source_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  entry_id TEXT REFERENCES document_entries(id) ON DELETE SET NULL,
+  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  task TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX material_outputs_source ON material_outputs(source_id);
+CREATE INDEX material_outputs_child ON material_outputs(document_id);
+''';

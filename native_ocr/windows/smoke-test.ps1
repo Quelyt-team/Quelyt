@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$ProjectDirectory = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 )
 $ErrorActionPreference = 'Stop'
@@ -19,6 +19,14 @@ public static class OcrSmokeNative {
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] public delegate void SetImage(IntPtr api, IntPtr pixels, int width, int height, int channels, int stride);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] public delegate IntPtr GetText(IntPtr api);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] public delegate void DeleteText(IntPtr text);
+    public static string PtrToUtf8(IntPtr ptr) {
+        if (ptr == IntPtr.Zero) return string.Empty;
+        int len = 0;
+        while (Marshal.ReadByte(ptr, len) != 0) len++;
+        byte[] buf = new byte[len];
+        Marshal.Copy(ptr, buf, 0, len);
+        return System.Text.Encoding.UTF8.GetString(buf);
+    }
 }
 '@
 
@@ -68,7 +76,7 @@ try {
     $setImage.Invoke($api, $pixels.Scan0, $bitmap.Width, $bitmap.Height, 3, $pixels.Stride)
     $textPointer = $getText.Invoke($api)
     try {
-        $recognized = [Runtime.InteropServices.Marshal]::PtrToStringUTF8($textPointer)
+        $recognized = [OcrSmokeNative]::PtrToUtf8($textPointer)
         Write-Output $recognized.Trim()
         if ($recognized -notmatch 'Momentum' -or $recognized -notmatch '守恒') {
             throw 'The generated bilingual smoke sample did not match expected text.'

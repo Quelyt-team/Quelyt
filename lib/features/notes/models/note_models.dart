@@ -1,12 +1,11 @@
-﻿import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart';
 
 import '../../../core/models.dart';
 
 enum NoteLifecycle { active, trashed }
 
-NoteLifecycle noteLifecycleFrom(String value) => value == 'trashed'
-    ? NoteLifecycle.trashed
-    : NoteLifecycle.active;
+NoteLifecycle noteLifecycleFrom(String value) =>
+    value == 'trashed' ? NoteLifecycle.trashed : NoteLifecycle.active;
 
 enum NoteQuestionStatus { open, resolved }
 
@@ -184,6 +183,11 @@ class NoteSource {
     this.excerpt = '',
     this.sourceType = 'document',
     this.title = '',
+    this.timeMs,
+    this.locatorLabel,
+    this.url,
+    this.conversationId,
+    this.assetName,
     required this.createdAt,
   });
 
@@ -196,7 +200,30 @@ class NoteSource {
   final String excerpt;
   final String sourceType;
   final String title;
+  final int? timeMs;
+  final String? locatorLabel;
+  final String? url;
+  final String? conversationId;
+  final String? assetName;
   final DateTime createdAt;
+
+  NoteSource forNote(String noteId, String id) => NoteSource(
+    id: id,
+    noteId: noteId,
+    documentId: documentId,
+    documentHash: documentHash,
+    page: page,
+    region: region,
+    excerpt: excerpt,
+    sourceType: sourceType,
+    title: title,
+    timeMs: timeMs,
+    locatorLabel: locatorLabel,
+    url: url,
+    conversationId: conversationId,
+    assetName: assetName,
+    createdAt: createdAt,
+  );
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -208,6 +235,11 @@ class NoteSource {
     'excerpt': excerpt,
     'sourceType': sourceType,
     'title': title,
+    if (timeMs != null) 'timeMs': timeMs,
+    if (locatorLabel != null) 'locatorLabel': locatorLabel,
+    if (url != null) 'url': url,
+    if (conversationId != null) 'conversationId': conversationId,
+    if (assetName != null) 'assetName': assetName,
     'createdAt': createdAt.toIso8601String(),
   };
 
@@ -221,8 +253,40 @@ class NoteSource {
     excerpt: json['excerpt'] as String? ?? '',
     sourceType: json['sourceType'] as String? ?? 'document',
     title: json['title'] as String? ?? '',
+    timeMs: (json['timeMs'] as num?)?.toInt(),
+    locatorLabel: json['locatorLabel'] as String?,
+    url: json['url'] as String?,
+    conversationId: json['conversationId'] as String?,
+    assetName: json['assetName'] as String?,
     createdAt: _date(json['createdAt']) ?? DateTime.now(),
   );
+}
+
+class AnswerNoteSection {
+  const AnswerNoteSection(this.markdown, {this.sources = const []});
+
+  final String markdown;
+  final List<NoteSource> sources;
+}
+
+/// A complete local snapshot. Selected sections retain only their own
+/// citations, and never depend on the continued existence of a conversation.
+class AnswerNoteDraft {
+  const AnswerNoteDraft({
+    required this.answerId,
+    required this.question,
+    required this.documentId,
+    required this.sections,
+    this.conversationSource,
+    this.label = 'AI 回答',
+  });
+
+  final String answerId;
+  final String question;
+  final String documentId;
+  final List<AnswerNoteSection> sections;
+  final NoteSource? conversationSource;
+  final String label;
 }
 
 class NoteQuestion {
@@ -358,8 +422,7 @@ class NoteItem {
   final Set<String> tagIds;
 
   int get openQuestions => questions.where((q) => q.isOpen).length;
-  NoteSource? get primarySource =>
-      sources.isEmpty ? null : sources.first;
+  NoteSource? get primarySource => sources.isEmpty ? null : sources.first;
 }
 
 class NoteListSummary {
@@ -379,6 +442,9 @@ class NoteListSummary {
     final source = primarySource;
     if (source == null || source.documentId == null) return null;
     final name = source.title.trim().isEmpty ? '资料' : source.title.trim();
+    if (source.locatorLabel case final locator? when locator.isNotEmpty) {
+      return '$name · $locator';
+    }
     return source.page == null ? name : '$name · P.${source.page}';
   }
 }

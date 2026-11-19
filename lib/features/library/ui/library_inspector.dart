@@ -227,10 +227,7 @@ class LibraryOverviewInspector extends StatelessWidget {
               for (final tag in controller.tags)
                 FilterChip(
                   visualDensity: VisualDensity.compact,
-                  label: Text(
-                    tag.name,
-                    style: const TextStyle(fontSize: 12),
-                  ),
+                  label: Text(tag.name, style: const TextStyle(fontSize: 12)),
                   selected: controller.filter.tagIds.contains(tag.id),
                   onSelected: (selected) {
                     final next = {...controller.filter.tagIds};
@@ -369,6 +366,7 @@ class LibraryItemInspector extends StatefulWidget {
     required this.onLearningMode,
     this.onOpenNote,
     this.onCreateNote,
+    this.onOpenRelated,
   });
 
   final LibraryItem item;
@@ -386,6 +384,7 @@ class LibraryItemInspector extends StatefulWidget {
   final ValueChanged<DocumentKind> onLearningMode;
   final ValueChanged<String>? onOpenNote;
   final ValueChanged<DocumentRecord>? onCreateNote;
+  final ValueChanged<DocumentRecord>? onOpenRelated;
 
   @override
   State<LibraryItemInspector> createState() => _LibraryItemInspectorState();
@@ -413,6 +412,7 @@ class _LibraryItemInspectorState extends State<LibraryItemInspector> {
     final progress = controller.progressFor(document.id);
     final notesRepo = NotesRepository(controller.store);
     final linkedNotes = notesRepo.notesReferencing(document.id, limit: 8);
+    final related = controller.repository.relatedMaterials(document.id);
     final questionCounts = notesRepo.openQuestionCounts(
       linkedNotes.map((n) => n.id),
     );
@@ -433,15 +433,12 @@ class _LibraryItemInspectorState extends State<LibraryItemInspector> {
         const SizedBox(height: 14),
         Text(
           item.displayName,
-          style: context.texts.titleSmall!.copyWith(
-            fontSize: 15,
-            height: 1.4,
-          ),
+          style: context.texts.titleSmall!.copyWith(fontSize: 15, height: 1.4),
         ),
         const SizedBox(height: 4),
         Text(
-          '${formatLabel(document.format)} · ${formatSize(document.sizeBytes)}'
-          ' · ${document.pageCount} 页',
+          '${formatLabel(documentFormat(document))} · ${formatSize(document.sizeBytes)}'
+          '${document.isVideo ? '' : ' · ${document.pageCount} ${document.isSlides ? '张幻灯片' : '页'}'}',
           style: context.texts.bodySmall!.copyWith(
             fontSize: 12,
             color: colors.inkMuted,
@@ -461,7 +458,7 @@ class _LibraryItemInspectorState extends State<LibraryItemInspector> {
               child: FilledButton.icon(
                 onPressed: widget.onOpen,
                 icon: const QIcon(QIcons.play, size: IconSizes.sm),
-                label: const Text('阅读'),
+                label: Text(document.isVideo ? '打开视频' : '阅读'),
               ),
             ),
             const SizedBox(width: 6),
@@ -508,12 +505,13 @@ class _LibraryItemInspectorState extends State<LibraryItemInspector> {
                   )
                 : null,
           ),
-          _DetailRow(
-            label: '阅读进度',
-            value: progress.hasPages
-                ? '第 ${document.currentPage} / ${document.pageCount} 页'
-                : '第 ${document.currentPage} / ${document.pageCount} 页 · 待处理',
-          ),
+          if (!document.isVideo)
+            _DetailRow(
+              label: '阅读进度',
+              value:
+                  '第 ${document.currentPage} / ${document.pageCount} ${document.pageUnit}'
+                  '${progress.hasPages ? '' : ' · 待处理'}',
+            ),
           _DetailRow(label: '导入日期', value: dateLabel(document.addedAt)),
           _DetailRow(label: '最近打开', value: openedLabel(document.lastOpenedAt)),
           _DetailRow(
@@ -558,12 +556,12 @@ class _LibraryItemInspectorState extends State<LibraryItemInspector> {
             spacing: 6,
             runSpacing: 6,
             children: [
-              for (final mode in DocumentKind.values)
+              for (final mode
+                  in document.isVideo
+                      ? const [DocumentKind.video]
+                      : DocumentKindX.pageModes)
                 ChoiceChip(
-                  label: Text(
-                    mode.label,
-                    style: const TextStyle(fontSize: 12),
-                  ),
+                  label: Text(mode.label, style: const TextStyle(fontSize: 12)),
                   selected: document.kind == mode,
                   onSelected: (_) => widget.onLearningMode(mode),
                 ),
@@ -577,6 +575,20 @@ class _LibraryItemInspectorState extends State<LibraryItemInspector> {
               color: colors.inkMuted,
             ),
           ),
+        ],
+        if (related.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Text('原件与成果', style: context.texts.titleSmall),
+          for (final other in related)
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: Text(other.title, maxLines: 2),
+              trailing: const QIcon(QIcons.external, size: IconSizes.sm),
+              onTap: widget.onOpenRelated == null
+                  ? null
+                  : () => widget.onOpenRelated!(other),
+            ),
         ],
         const SizedBox(height: 10),
         _sectionHeader(
