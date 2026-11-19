@@ -22,10 +22,17 @@ jobs:
       - run: flutter analyze
       - run: flutter test
       - run: flutter build windows --release
+      - name: Build Windows one-click installer
+        shell: pwsh
+        run: .\scripts\build-windows-installer.ps1
       - uses: actions/upload-artifact@v4
         with:
           name: windows-development-bundle
           path: build/windows/x64/runner/Release/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-one-click-installer
+          path: build/dist/*-windows-x64-setup.exe
 
   android:
     runs-on: ubuntu-latest
